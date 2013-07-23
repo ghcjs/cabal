@@ -195,7 +195,8 @@ data PackageDescription
         dataDir        :: FilePath,
         extraSrcFiles  :: [FilePath],
         extraTmpFiles  :: [FilePath],
-        extraHtmlFiles :: [FilePath]
+        extraHtmlFiles :: [FilePath],
+        extraJsFiles   :: [FilePath]
     }
     deriving (Show, Read, Eq, Typeable, Data)
 
@@ -259,7 +260,8 @@ emptyPackageDescription
                       dataDir      = "",
                       extraSrcFiles = [],
                       extraTmpFiles = [],
-                      extraHtmlFiles = []
+                      extraHtmlFiles = [],
+                      extraJsFiles = []
                      }
 
 -- | The type of build system used by this package.
@@ -642,6 +644,7 @@ data BuildInfo = BuildInfo {
         pkgconfigDepends  :: [Dependency], -- ^ pkg-config packages that are used
         frameworks        :: [String], -- ^support frameworks for Mac OS X
         cSources          :: [FilePath],
+        jsSources         :: [FilePath], -- ^ JavaScript sources
         hsSourceDirs      :: [FilePath], -- ^ where to look for the haskell module hierarchy
         otherModules      :: [ModuleName], -- ^ non-exposed or non-main modules
 
@@ -676,6 +679,7 @@ instance Monoid BuildInfo where
     pkgconfigDepends  = [],
     frameworks        = [],
     cSources          = [],
+    jsSources         = [],
     hsSourceDirs      = [],
     otherModules      = [],
     defaultLanguage   = Nothing,
@@ -703,6 +707,7 @@ instance Monoid BuildInfo where
     pkgconfigDepends  = combine    pkgconfigDepends,
     frameworks        = combineNub frameworks,
     cSources          = combineNub cSources,
+    jsSources         = combineNub jsSources,
     hsSourceDirs      = combineNub hsSourceDirs,
     otherModules      = combineNub otherModules,
     defaultLanguage   = combineMby defaultLanguage,

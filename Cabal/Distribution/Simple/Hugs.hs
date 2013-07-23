@@ -136,7 +136,7 @@ configure verbosity hcPath _hcPkgPath conf = do
                             (orLaterVersion (Version [2006] [])) conf'
 
   let comp = Compiler {
-        compilerId             = CompilerId Hugs version,
+        compilerId             = CompilerId Hugs version Nothing,
         compilerLanguages      = hugsLanguages,
         compilerExtensions     = hugsLanguageExtensions
       }

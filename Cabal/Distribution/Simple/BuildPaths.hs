@@ -120,9 +120,11 @@ mkProfLibName (LibraryName lib) =  "lib" ++ lib ++ "_p" <.> "a"
 -- libHS<packagename>-<compilerFlavour><compilerVersion>
 -- e.g. libHSbase-2.1-ghc6.6.1.so
 mkSharedLibName :: CompilerId -> LibraryName -> String
-mkSharedLibName (CompilerId compilerFlavor compilerVersion) (LibraryName lib)
-  = "lib" ++ lib ++ "-" ++ comp <.> dllExtension
-  where comp = display compilerFlavor ++ display compilerVersion
+mkSharedLibName cid (LibraryName lib)
+  = "lib" ++ lib ++ "-" ++ comp cid <.> dllExtension
+  where comp (CompilerId compilerFlavor compilerVersion sub) = 
+          display compilerFlavor ++ display compilerVersion ++
+          maybe "" (('_' :) . comp) sub
 
 -- ------------------------------------------------------------
 -- * Platform file extensions

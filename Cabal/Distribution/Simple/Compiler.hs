@@ -93,10 +93,10 @@ showCompilerId :: Compiler -> String
 showCompilerId = display . compilerId
 
 compilerFlavor ::  Compiler -> CompilerFlavor
-compilerFlavor = (\(CompilerId f _) -> f) . compilerId
+compilerFlavor = (\(CompilerId f _ _) -> f) . compilerId
 
 compilerVersion :: Compiler -> Version
-compilerVersion = (\(CompilerId _ v) -> v) . compilerId
+compilerVersion = (\(CompilerId _ v _) -> v) . compilerId
 
 -- ------------------------------------------------------------
 -- * Package databases

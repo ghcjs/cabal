@@ -62,6 +62,7 @@ import Distribution.Simple.Compiler
 import Distribution.Simple.Setup (CopyFlags(..), CopyDest(..), fromFlag)
 
 import qualified Distribution.Simple.GHC  as GHC
+import qualified Distribution.Simple.GHCJS as GHCJS
 import qualified Distribution.Simple.NHC  as NHC
 import qualified Distribution.Simple.JHC  as JHC
 import qualified Distribution.Simple.LHC  as LHC
@@ -160,6 +161,10 @@ install pkg_descr lbi flags = do
                   GHC.installLib verbosity lbi libPref dynlibPref buildPref pkg_descr
                 withExe pkg_descr $
                   GHC.installExe verbosity lbi installDirs buildPref (progPrefixPref, progSuffixPref) pkg_descr
+     GHCJS-> do withLibLBI pkg_descr lbi $
+                  GHCJS.installLib verbosity lbi libPref dynlibPref buildPref pkg_descr
+                withExe pkg_descr $
+                  GHCJS.installExe verbosity lbi installDirs buildPref (progPrefixPref, progSuffixPref) pkg_descr
      LHC  -> do withLibLBI pkg_descr lbi $
                   LHC.installLib verbosity lbi libPref dynlibPref buildPref pkg_descr
                 withExe pkg_descr $

@@ -131,7 +131,7 @@ configure verbosity hcPath _hcPkgPath conf = do
   -- unless (null (cSources bi)) $ requireProgram ccProgram anyVersion
 
   let comp = Compiler {
-        compilerId         = CompilerId NHC nhcVersion,
+        compilerId         = CompilerId NHC nhcVersion Nothing,
         compilerLanguages  = nhcLanguages,
         compilerExtensions     = nhcLanguageExtensions
       }

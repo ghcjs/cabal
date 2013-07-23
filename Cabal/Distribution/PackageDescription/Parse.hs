@@ -177,6 +177,9 @@ pkgDescrFieldDescrs =
  , listField "extra-html-files"
            showFilePath    parseFilePathQ
            extraHtmlFiles         (\val pkg -> pkg{extraHtmlFiles=val})
+ , listField "extra-js-files"
+           showFilePath    parseFilePathQ
+           extraJsFiles           (\val pkg -> pkg{extraJsFiles=val})
  ]
 
 -- | Store any fields beginning with "x-" in the customFields field of
@@ -415,7 +418,9 @@ binfoFieldDescrs =
  , listField   "c-sources"
            showFilePath       parseFilePathQ
            cSources           (\paths binfo -> binfo{cSources=paths})
-
+ , listField   "js-sources"
+           showFilePath       parseFilePathQ
+           jsSources          (\paths binfo -> binfo{jsSources=paths})
  , simpleField "default-language"
            (maybe empty disp) (option Nothing (fmap Just parseLanguageQ))
            defaultLanguage    (\lang  binfo -> binfo{defaultLanguage=lang})

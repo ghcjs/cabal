@@ -72,6 +72,23 @@ module Distribution.Simple.GHC (
         componentGhcOptions,
         ghcLibDir,
         ghcDynamic,
+        
+        registerPackage',
+        buildExe',
+        buildLib',
+        libAbiHash',
+        initPackageDB',
+        ghcLibDir',
+        checkPackageDbStack,
+        guessToolFromGhcPath,
+        configureToolchain,
+        getLanguages,
+        getExtensions,
+        guessHsc2hsFromGhcPath,
+        targetPlatform,
+        substTopDir,
+        checkPackageDbEnvVar,
+        GhcOptions(..)
  ) where
 
 import qualified Distribution.Simple.GHC.IPI641 as IPI641
@@ -104,7 +121,8 @@ import Distribution.Simple.Program
          , userMaybeSpecifyPath, programPath, lookupProgram, addKnownProgram
          , ghcProgram, ghcPkgProgram, hsc2hsProgram
          , arProgram, ranlibProgram, ldProgram
-         , gccProgram, stripProgram )
+         , gccProgram, stripProgram
+         )
 import qualified Distribution.Simple.Program.HcPkg as HcPkg
 import qualified Distribution.Simple.Program.Ar    as Ar
 import qualified Distribution.Simple.Program.Ld    as Ld
@@ -194,7 +212,7 @@ configure verbosity hcPath hcPkgPath conf0 = do
   ghcInfo <- getGhcInfo verbosity ghcProg
 
   let comp = Compiler {
-        compilerId             = CompilerId GHC ghcVersion,
+        compilerId             = CompilerId GHC ghcVersion Nothing,
         compilerLanguages      = languages,
         compilerExtensions     = extensions
       }
@@ -648,9 +666,22 @@ substTopDir topDir ipo
 
 -- | Build a library with GHC.
 --
-buildLib :: Verbosity -> PackageDescription -> LocalBuildInfo
-                      -> Library            -> ComponentLocalBuildInfo -> IO ()
+buildLib :: Verbosity -> PackageDescription       -> LocalBuildInfo
+                      -> Library                  -> ComponentLocalBuildInfo -> IO ()
 buildLib verbosity pkg_descr lbi lib clbi = do
+  libBi <- hackThreadedFlag verbosity
+         (compiler lbi) (withProfLib lbi) (libBuildInfo lib)
+  (ghcProg, _) <- requireProgram verbosity ghcProgram (withPrograms lbi)
+  buildLib' ghcProg haveStubO fixOdir libBi verbosity pkg_descr lbi lib clbi
+    where
+      ghcVersion = compilerVersion (compiler lbi)
+      haveStubO  = ghcVersion < Version [7,2] [] -- ghc-7.2+ does not make _stub.o files
+      fixOdir    = fixComponentCcGhcOptionsOdir lbi -- work around ghc 6.4.0 bug
+
+buildLib' :: ConfiguredProgram -> Bool -> (FilePath -> FilePath -> FilePath) -> BuildInfo
+          -> Verbosity -> PackageDescription -> LocalBuildInfo -> Library
+          -> ComponentLocalBuildInfo -> IO ()
+buildLib' ghcProg haveStubO fixOdir libBi verbosity pkg_descr lbi lib clbi = do
   libName <- case componentLibraries clbi of
              [libName] -> return libName
              [] -> die "No library name found when building library"
@@ -662,14 +693,8 @@ buildLib verbosity pkg_descr lbi lib clbi = do
       whenProfLib = when (withProfLib lbi)
       whenSharedLib forceShared = when (forceShared || withSharedLib lbi)
       whenGHCiLib = when (withGHCiLib lbi && withVanillaLib lbi)
-      comp = compiler lbi
-      ghcVersion = compilerVersion comp
 
-  (ghcProg, _) <- requireProgram verbosity ghcProgram (withPrograms lbi)
   let runGhcProg = runGHC verbosity ghcProg
-
-  libBi <- hackThreadedFlag verbosity
-             comp (withProfLib lbi) (libBuildInfo lib)
 
   isGhcDynamic <- ghcDynamic verbosity ghcProg
   dynamicTooSupported <- ghcSupportsDynamicToo verbosity ghcProg
@@ -728,7 +753,7 @@ buildLib verbosity pkg_descr lbi lib clbi = do
      info verbosity "Building C Sources..."
      sequence_
        [ do let vanillaCcOpts = (componentCcGhcOptions verbosity lbi
-                                    libBi clbi pref filename)
+                                    libBi clbi (fixOdir pref filename) filename)
                 profCcOpts    = vanillaCcOpts `mappend` mempty {
                                   ghcOptProfilingMode = toFlag True,
                                   ghcOptObjSuffix     = toFlag "p_o"
@@ -763,17 +788,17 @@ buildLib verbosity pkg_descr lbi lib clbi = do
   stubObjs <- fmap catMaybes $ sequence
     [ findFileWithExtension [objExtension] [libTargetDir]
         (ModuleName.toFilePath x ++"_stub")
-    | ghcVersion < Version [7,2] [] -- ghc-7.2+ does not make _stub.o files
+    | haveStubO -- ghc-7.2+ does not make _stub.o files
     , x <- libModules lib ]
   stubProfObjs <- fmap catMaybes $ sequence
     [ findFileWithExtension ["p_" ++ objExtension] [libTargetDir]
         (ModuleName.toFilePath x ++"_stub")
-    | ghcVersion < Version [7,2] [] -- ghc-7.2+ does not make _stub.o files
+    | haveStubO -- ghc-7.2+ does not make _stub.o files
     , x <- libModules lib ]
   stubSharedObjs <- fmap catMaybes $ sequence
     [ findFileWithExtension ["dyn_" ++ objExtension] [libTargetDir]
         (ModuleName.toFilePath x ++"_stub")
-    | ghcVersion < Version [7,2] [] -- ghc-7.2+ does not make _stub.o files
+    | haveStubO -- ghc-7.2+ does not make _stub.o files
     , x <- libModules lib ]
 
   hObjs     <- getHaskellObjects lib lbi
@@ -857,15 +882,23 @@ buildLib verbosity pkg_descr lbi lib clbi = do
 --
 buildExe :: Verbosity -> PackageDescription -> LocalBuildInfo
                       -> Executable         -> ComponentLocalBuildInfo -> IO ()
-buildExe verbosity _pkg_descr lbi
+buildExe verbosity pkg_descr lbi exe clbi = do
+  exeBi <- hackThreadedFlag verbosity
+             (compiler lbi) (withProfExe lbi) (buildInfo exe)
+  (ghcProg, _) <- requireProgram verbosity ghcProgram (withPrograms lbi)
+  buildExe' ghcProg fixOdir exeBi verbosity pkg_descr lbi exe clbi
+    where
+      fixOdir = fixComponentCcGhcOptionsOdir lbi -- work around ghc 6.4.0 bug
+
+
+buildExe' :: ConfiguredProgram -> (FilePath -> FilePath -> FilePath) -> BuildInfo
+          -> Verbosity  -> PackageDescription  -> LocalBuildInfo
+          -> Executable -> ComponentLocalBuildInfo -> IO ()
+buildExe' ghcProg fixOdir exeBi verbosity _pkg_descr lbi
   exe@Executable { exeName = exeName', modulePath = modPath } clbi = do
   let pref = buildDir lbi
 
-  (ghcProg, _) <- requireProgram verbosity ghcProgram (withPrograms lbi)
   let runGhcProg = runGHC verbosity ghcProg
-
-  exeBi <- hackThreadedFlag verbosity
-             (compiler lbi) (withProfExe lbi) (buildInfo exe)
 
   -- exeNameReal, the name that GHC really uses (with .exe on Windows)
   let exeNameReal = exeName' <.>
@@ -962,7 +995,7 @@ buildExe verbosity _pkg_descr lbi
    info verbosity "Building C Sources..."
    sequence_
      [ do let opts = (componentCcGhcOptions verbosity lbi exeBi clbi
-                         exeDir filename) `mappend` mempty {
+                         (fixOdir exeDir filename) filename) `mappend` mempty {
                        ghcOptDynamic       = toFlag (withDynExe lbi),
                        ghcOptProfilingMode = toFlag (withProfExe lbi)
                      }
@@ -1022,6 +1055,11 @@ libAbiHash :: Verbosity -> PackageDescription -> LocalBuildInfo
 libAbiHash verbosity pkg_descr lbi lib clbi = do
   libBi <- hackThreadedFlag verbosity
              (compiler lbi) (withProfLib lbi) (libBuildInfo lib)
+  libAbiHash' ghcProgram libBi verbosity pkg_descr lbi lib clbi
+
+libAbiHash' :: Program -> BuildInfo -> Verbosity -> PackageDescription
+            -> LocalBuildInfo -> Library -> ComponentLocalBuildInfo -> IO String
+libAbiHash' program libBi verbosity pkg_descr lbi lib clbi = do
   let
       vanillaArgs =
         (componentGhcOptions verbosity lbi libBi clbi (buildDir lbi))
@@ -1048,7 +1086,7 @@ libAbiHash verbosity pkg_descr lbi lib clbi = do
            else if withProfLib    lbi then profArgs
            else error "libAbiHash: Can't find an enabled library way"
   --
-  (ghcProg, _) <- requireProgram verbosity ghcProgram (withPrograms lbi)
+  (ghcProg, _) <- requireProgram verbosity program (withPrograms lbi)
   getProgramInvocationOutput verbosity (ghcInvocation ghcProg ghcArgs)
 
 
@@ -1091,7 +1129,7 @@ componentCcGhcOptions :: Verbosity -> LocalBuildInfo
                       -> BuildInfo -> ComponentLocalBuildInfo
                       -> FilePath -> FilePath
                       -> GhcOptions
-componentCcGhcOptions verbosity lbi bi clbi pref filename =
+componentCcGhcOptions verbosity lbi bi clbi odir filename =
     mempty {
       ghcOptVerbosity      = toFlag verbosity,
       ghcOptMode           = toFlag GhcModeCompile,
@@ -1107,10 +1145,12 @@ componentCcGhcOptions verbosity lbi bi clbi pref filename =
                                   _              -> ["-O2"],
       ghcOptObjDir         = toFlag odir
     }
-  where
-    odir | compilerVersion (compiler lbi) >= Version [6,4,1] []  = pref
-         | otherwise = pref </> takeDirectory filename
-         -- ghc 6.4.0 had a bug in -odir handling for C compilations.
+
+fixComponentCcGhcOptionsOdir :: LocalBuildInfo -> FilePath -> FilePath -> FilePath
+fixComponentCcGhcOptionsOdir lbi pref filename
+   | compilerVersion (compiler lbi) >= Version [6,4,1] []  = pref
+   | otherwise = pref </> takeDirectory filename
+   -- ghc 6.4.0 had a bug in -odir handling for C compilations.
 
 mkGHCiLibName :: LibraryName -> String
 mkGHCiLibName (LibraryName lib) = lib <.> "o"
@@ -1225,9 +1265,14 @@ updateLibArchive verbosity lbi path
 
 -- | Create an empty package DB at the specified location.
 initPackageDB :: Verbosity -> ProgramConfiguration -> FilePath -> IO ()
-initPackageDB verbosity conf dbPath = HcPkg.init verbosity ghcPkgProg dbPath
+initPackageDB = initPackageDB' ghcPkgProgram
+
+initPackageDB' :: Program -> Verbosity -> ProgramConfiguration
+               -> FilePath -> IO ()
+initPackageDB' program verbosity conf dbPath =
+  HcPkg.init verbosity ghcPkgProg dbPath
   where
-    Just ghcPkgProg = lookupProgram ghcPkgProgram conf
+    Just ghcPkgProg = lookupProgram program conf
 
 -- | Run 'ghc-pkg' using a given package DB stack, directly forwarding the
 -- provided command-line arguments to it.
@@ -1246,8 +1291,13 @@ registerPackage
   -> Bool
   -> PackageDBStack
   -> IO ()
-registerPackage verbosity installedPkgInfo _pkg lbi _inplace packageDbs = do
-  let Just ghcPkg = lookupProgram ghcPkgProgram (withPrograms lbi)
+registerPackage = registerPackage' ghcPkgProgram
+
+registerPackage' :: Program -> Verbosity -> InstalledPackageInfo
+                 -> PackageDescription -> LocalBuildInfo
+                 -> Bool -> PackageDBStack -> IO ()
+registerPackage' program verbosity installedPkgInfo _pkg lbi _inplace packageDbs = do
+  let Just ghcPkg = lookupProgram program (withPrograms lbi)
   HcPkg.reregister verbosity ghcPkg packageDbs (Right installedPkgInfo)
 
 -- -----------------------------------------------------------------------------

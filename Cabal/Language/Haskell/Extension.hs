@@ -657,6 +657,9 @@ data KnownExtension =
   -- * <http://www.haskell.org/haskellwiki/GHC/Data_Parallel_Haskell>
   | ParallelArrays
 
+  -- | Enable @foreign import javascript@
+  | JavaScriptFFI
+
   deriving (Show, Read, Eq, Enum, Bounded, Typeable, Data)
 
 {-# DEPRECATED knownExtensions

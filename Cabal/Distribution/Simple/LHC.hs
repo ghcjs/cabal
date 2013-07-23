@@ -152,7 +152,7 @@ configure verbosity hcPath hcPkgPath conf = do
   extensions <- getExtensions verbosity lhcProg
 
   let comp = Compiler {
-        compilerId             = CompilerId LHC lhcVersion,
+        compilerId             = CompilerId LHC lhcVersion Nothing,
         compilerLanguages      = languages,
         compilerExtensions     = extensions
       }

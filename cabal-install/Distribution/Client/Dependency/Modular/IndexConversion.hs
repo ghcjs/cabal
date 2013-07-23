@@ -153,7 +153,7 @@ convBranch :: OS -> Arch -> CompilerId ->
               (Condition ConfVar,
                CondTree ConfVar [Dependency] a,
                Maybe (CondTree ConfVar [Dependency] a)) -> FlaggedDeps PN
-convBranch os arch cid@(CompilerId cf cv) pi fds p (c', t', mf') =
+convBranch os arch cid pi fds p (c', t', mf') =
   go c' (          convCondTree os arch cid pi fds p   t')
         (maybe [] (convCondTree os arch cid pi fds p) mf')
   where
@@ -172,8 +172,11 @@ convBranch os arch cid@(CompilerId cf cv) pi fds p (c', t', mf') =
       | arch == arch'  = t
       | otherwise      = f
     go (Var (Impl cf' cvr')) t f
-      | cf == cf' && checkVR cvr' cv = t
-      | otherwise      = f
+      | goImpl cf' cvr' cid = t
+      | otherwise           = f
+    goImpl cf' cvr' (CompilerId cf cv sub) =
+      cf == cf' && checkVR cvr' cv ||
+      maybe False (goImpl cf' cvr') sub
 
 -- | Convert a Cabal dependency to a solver-specific dependency.
 convDep :: PN -> Dependency -> Dep PN

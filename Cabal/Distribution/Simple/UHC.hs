@@ -84,7 +84,7 @@ configure verbosity hcPath _hcPkgPath conf = do
     (userMaybeSpecifyPath "uhc" hcPath conf)
 
   let comp = Compiler {
-               compilerId         =  CompilerId UHC uhcVersion,
+               compilerId         =  CompilerId UHC uhcVersion Nothing,
                compilerLanguages  =  uhcLanguages,
                compilerExtensions =  uhcLanguageExtensions
              }

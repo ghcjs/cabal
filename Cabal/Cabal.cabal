@@ -1,5 +1,5 @@
 name: Cabal
-version: 1.17.0
+version: 1.17.0.2
 copyright: 2003-2006, Isaac Jones
            2005-2011, Duncan Coutts
 license: BSD3
@@ -167,6 +167,7 @@ library
     Distribution.Simple.Compiler
     Distribution.Simple.Configure
     Distribution.Simple.GHC
+    Distribution.Simple.GHCJS
     Distribution.Simple.Haddock
     Distribution.Simple.Hpc
     Distribution.Simple.Hugs
@@ -233,55 +234,55 @@ test-suite unit-tests
   ghc-options: -Wall
   default-language: Haskell98
 
--- Large, system tests that build packages.
-test-suite package-tests
-  type: exitcode-stdio-1.0
-  main-is: PackageTests.hs
-  other-modules:
-    Distribution.Compat.CreatePipe
-    PackageTests.BenchmarkExeV10.Check
-    PackageTests.BenchmarkOptions.Check
-    PackageTests.BenchmarkStanza.Check
-    PackageTests.BuildDeps.GlobalBuildDepsNotAdditive1.Check
-    PackageTests.BuildDeps.GlobalBuildDepsNotAdditive2.Check
-    PackageTests.BuildDeps.InternalLibrary0.Check
-    PackageTests.BuildDeps.InternalLibrary1.Check
-    PackageTests.BuildDeps.InternalLibrary2.Check
-    PackageTests.BuildDeps.InternalLibrary3.Check
-    PackageTests.BuildDeps.InternalLibrary4.Check
-    PackageTests.BuildDeps.SameDepsAllRound.Check
-    PackageTests.BuildDeps.TargetSpecificDeps1.Check
-    PackageTests.BuildDeps.TargetSpecificDeps2.Check
-    PackageTests.BuildDeps.TargetSpecificDeps3.Check
-    PackageTests.BuildTestSuiteDetailedV09.Check
-    PackageTests.CMain.Check
-    PackageTests.EmptyLib.Check
-    PackageTests.OrderFlags.Check
-    PackageTests.PackageTester
-    PackageTests.PathsModule.Executable.Check
-    PackageTests.PathsModule.Library.Check
-    PackageTests.PreProcess.Check
-    PackageTests.TemplateHaskell.Check
-    PackageTests.TestOptions.Check
-    PackageTests.TestStanza.Check
-    PackageTests.TestSuiteExeV10.Check
-  hs-source-dirs: tests
-  build-depends:
-    base,
-    test-framework,
-    test-framework-quickcheck2 >= 0.2.12,
-    test-framework-hunit,
-    HUnit,
-    QuickCheck >= 2.1.0.1,
-    Cabal,
-    process,
-    directory,
-    filepath,
-    extensible-exceptions,
-    bytestring,
-    regex-posix
-  if !os(windows)
-    build-depends: unix
-  ghc-options: -Wall
-  default-extensions: CPP
-  default-language: Haskell98
+-- -- Large, system tests that build packages.
+-- test-suite package-tests
+--   type: exitcode-stdio-1.0
+--   main-is: PackageTests.hs
+--   other-modules:
+--     Distribution.Compat.CreatePipe
+--     PackageTests.BenchmarkExeV10.Check
+--     PackageTests.BenchmarkOptions.Check
+--     PackageTests.BenchmarkStanza.Check
+--     PackageTests.BuildDeps.GlobalBuildDepsNotAdditive1.Check
+--     PackageTests.BuildDeps.GlobalBuildDepsNotAdditive2.Check
+--     PackageTests.BuildDeps.InternalLibrary0.Check
+--     PackageTests.BuildDeps.InternalLibrary1.Check
+--     PackageTests.BuildDeps.InternalLibrary2.Check
+--     PackageTests.BuildDeps.InternalLibrary3.Check
+--     PackageTests.BuildDeps.InternalLibrary4.Check
+--     PackageTests.BuildDeps.SameDepsAllRound.Check
+--     PackageTests.BuildDeps.TargetSpecificDeps1.Check
+--     PackageTests.BuildDeps.TargetSpecificDeps2.Check
+--     PackageTests.BuildDeps.TargetSpecificDeps3.Check
+--     PackageTests.BuildTestSuiteDetailedV09.Check
+--     PackageTests.CMain.Check
+--     PackageTests.EmptyLib.Check
+--     PackageTests.OrderFlags.Check
+--     PackageTests.PackageTester
+--     PackageTests.PathsModule.Executable.Check
+--     PackageTests.PathsModule.Library.Check
+--     PackageTests.PreProcess.Check
+--     PackageTests.TemplateHaskell.Check
+--     PackageTests.TestOptions.Check
+--     PackageTests.TestStanza.Check
+--     PackageTests.TestSuiteExeV10.Check
+--   hs-source-dirs: tests
+--   build-depends:
+--     base,
+--     test-framework,
+--     test-framework-quickcheck2 >= 0.2.12,
+--     test-framework-hunit,
+--     HUnit,
+--     QuickCheck >= 2.1.0.1,
+--     Cabal,
+--     process,
+--     directory,
+--     filepath,
+--     extensible-exceptions,
+--     bytestring,
+--     regex-posix
+--   if !os(windows)
+--     build-depends: unix
+--   ghc-options: -Wall
+--   default-extensions: CPP
+--   default-language: Haskell98
