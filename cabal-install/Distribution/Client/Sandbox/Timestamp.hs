@@ -17,7 +17,6 @@ module Distribution.Client.Sandbox.Timestamp (
   listModifiedDeps,
   ) where
 
-import Control.Exception                             (finally)
 import Control.Monad                                 (filterM, forM, when)
 import Data.Char                                     (isSpace)
 import Data.List                                     (partition)
@@ -26,6 +25,7 @@ import System.FilePath                               ((<.>), (</>))
 import qualified Data.Map as M
 
 import Distribution.Compiler                         (CompilerId)
+import Distribution.Package                          (packageName)
 import Distribution.PackageDescription.Configuration (flattenPackageDescription)
 import Distribution.PackageDescription.Parse         (readPackageDescription)
 import Distribution.Simple.Setup                     (Flag (..),
@@ -228,11 +228,21 @@ allPackageSourceFiles verbosity packageDir = inDir (Just packageDir) $ do
         useCabalVersion = orLaterVersion $ Version [1,17,0] []
         }
 
+      doListSources :: IO [FilePath]
+      doListSources = do
+        setupWrapper verbosity setupOpts (Just pkg) sdistCommand (const flags) []
+        srcs <- fmap lines . readFile $ file
+        mapM tryCanonicalizePath srcs
+
+      onFailedListSources :: IO ()
+      onFailedListSources = warn verbosity $
+          "Could not list sources of the add-source dependency '"
+          ++ display (packageName pkg) ++ "'. Skipping the timestamp check."
+
   -- Run setup sdist --list-sources=TMPFILE
-  (flip finally) (removeExistingFile file) $ do
-    setupWrapper verbosity setupOpts (Just pkg) sdistCommand (const flags) []
-    srcs <- fmap lines . readFile $ file
-    mapM tryCanonicalizePath srcs
+  ret <- doListSources `catchIO` (\_ -> onFailedListSources >> return [])
+  removeExistingFile file
+  return ret
 
 -- | Has this dependency been modified since we have last looked at it?
 isDepModified :: Verbosity -> EpochTime -> AddSourceTimestamp -> IO Bool
