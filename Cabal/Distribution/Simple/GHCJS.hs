@@ -208,9 +208,7 @@ installLib    :: Verbosity
               -> IO ()
 installLib verbosity lbi targetDir dynlibTargetDir builtDir pkg lib clbi = do
   GHC.installLib verbosity lbi targetDir dynlibTargetDir builtDir pkg lib clbi
-  when (hasLib) $ do copyModuleFiles "js_hi"
-                     copyModuleFiles "js"
-                     copyModuleFiles "ji"
+  when (hasLib) $ do mapM_ copyModuleFiles ["js_hi", "js_o"]
     where
       hasLib    = not $ null (libModules lib)
                      && null (cSources (libBuildInfo lib))
