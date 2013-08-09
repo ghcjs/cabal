@@ -208,10 +208,12 @@ installLib    :: Verbosity
               -> IO ()
 installLib verbosity lbi targetDir dynlibTargetDir builtDir pkg lib clbi = do
   GHC.installLib verbosity lbi targetDir dynlibTargetDir builtDir pkg lib clbi
-  when (hasLib) $ do mapM_ copyModuleFiles ["js_hi", "js_o"]
+  when hasLib $ do mapM_ copyModuleFiles ["js_hi", "js_o"]
+  when shared $ do mapM_ copyModuleFiles ["js_dyn_hi", "js_dyn_o"]
     where
       hasLib    = not $ null (libModules lib)
                      && null (cSources (libBuildInfo lib))
+      shared    = hasLib && withSharedLib lbi
       copyModuleFiles ext =
         findModuleFiles [builtDir] [ext] (libModules lib)
           >>= installOrdinaryFiles verbosity targetDir
@@ -277,7 +279,9 @@ ghcLibDir' verbosity ghcjsProg =
      rawSystemProgramStdout verbosity ghcjsProg ["--print-libdir"]
 
 ghcDynamic :: Verbosity -> ConfiguredProgram -> IO Bool
-ghcDynamic = GHC.ghcDynamic
+ghcDynamic v ghcjsProg = GHC.ghcDynamic v $
+  -- pretend to be a GHC version that supports --info
+  ghcjsProg { programVersion = Just (Version [7,6] []) }
 
 withVersion :: ConfiguredProgram -> ConfiguredProgram -> ConfiguredProgram
 withVersion ghcjsProg ghcProg = ghcjsProg { programVersion = programVersion ghcProg }
