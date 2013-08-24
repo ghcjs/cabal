@@ -70,7 +70,7 @@ import Distribution.PackageDescription.Utils
 import Distribution.Version
          ( VersionRange, anyVersion, intersectVersionRanges, withinRange )
 import Distribution.Compiler
-         ( CompilerId(CompilerId) )
+         ( CompilerId(CompilerId), CompilerFlavor(..) )
 import Distribution.System
          ( Platform(..), OS, Arch )
 import Distribution.Simple.Utils
@@ -128,13 +128,15 @@ simplifyCondition cond i = fv . walk $ cond
 --   the names of all the flags occurring in the condition.
 simplifyWithSysParams :: OS -> Arch -> CompilerId -> Condition ConfVar
                       -> (Condition FlagName, [FlagName])
-simplifyWithSysParams os arch (CompilerId comp compVer) cond = (cond', flags)
+simplifyWithSysParams os arch cid cond = (cond', flags)
   where
+    compCheck c vr (CompilerId comp compVer sub) =
+      comp == c && compVer `withinRange` vr ||
+      maybe False (compCheck c vr) sub
     (cond', flags) = simplifyCondition cond interp
     interp (OS os')    = Right $ os' == os
     interp (Arch arch') = Right $ arch' == arch
-    interp (Impl comp' vr) = Right $ comp' == comp
-                                  && compVer `withinRange` vr
+    interp (Impl comp vr) = Right $ compCheck comp vr cid
     interp (Flag  f)   = Left f
 
 -- TODO: Add instances and check

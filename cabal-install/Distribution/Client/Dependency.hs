@@ -366,7 +366,7 @@ applySandboxInstallPolicy
 chooseSolver :: Verbosity -> PreSolver -> CompilerId -> IO Solver
 chooseSolver _         AlwaysTopDown _                = return TopDown
 chooseSolver _         AlwaysModular _                = return Modular
-chooseSolver verbosity Choose        (CompilerId f v) = do
+chooseSolver verbosity Choose        (CompilerId f v _) = do
   let chosenSolver | f == GHC && v <= Version [7] [] = TopDown
                    | otherwise                       = Modular
       msg TopDown = warn verbosity "Falling back to topdown solver for GHC < 7."

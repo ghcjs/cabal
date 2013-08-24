@@ -131,12 +131,13 @@ import Distribution.Version
 import Distribution.Verbosity
     ( Verbosity, lessVerbose )
 
-import qualified Distribution.Simple.GHC  as GHC
-import qualified Distribution.Simple.JHC  as JHC
-import qualified Distribution.Simple.LHC  as LHC
-import qualified Distribution.Simple.NHC  as NHC
-import qualified Distribution.Simple.Hugs as Hugs
-import qualified Distribution.Simple.UHC  as UHC
+import qualified Distribution.Simple.GHC   as GHC
+import qualified Distribution.Simple.GHCJS as GHCJS
+import qualified Distribution.Simple.JHC   as JHC
+import qualified Distribution.Simple.LHC   as LHC
+import qualified Distribution.Simple.NHC   as NHC
+import qualified Distribution.Simple.Hugs  as Hugs
+import qualified Distribution.Simple.UHC   as UHC
 import qualified Distribution.Simple.HaskellSuite as HaskellSuite
 
 import Control.Monad
@@ -494,17 +495,19 @@ configure (pkg_descr0, pbi) cfg
                 then return False
                 else case flavor of
                             GHC | version >= Version [6,5] [] -> return True
+                            GHCJS                             -> return True
                             _ -> do warn verbosity
                                          ("this compiler does not support " ++
                                           "--enable-split-objs; ignoring")
                                     return False
-
         let sharedLibsByDefault =
               case compilerId comp of
-                CompilerId GHC _ ->
+                CompilerId GHC _ _ ->
                   -- if ghc is dynamic, then ghci needs a shared
                   -- library, so we build one by default.
                   GHC.ghcDynamic comp
+                CompilerId GHCJS _ _ ->
+                  GHCJS.ghcDynamic comp
                 _ -> False
 
         let lbi = LocalBuildInfo {
@@ -685,12 +688,13 @@ getInstalledPackages verbosity comp packageDBs progconf = do
 
   info verbosity "Reading installed packages..."
   case compilerFlavor comp of
-    GHC -> GHC.getInstalledPackages verbosity packageDBs progconf
-    Hugs->Hugs.getInstalledPackages verbosity packageDBs progconf
-    JHC -> JHC.getInstalledPackages verbosity packageDBs progconf
-    LHC -> LHC.getInstalledPackages verbosity packageDBs progconf
-    NHC -> NHC.getInstalledPackages verbosity packageDBs progconf
-    UHC -> UHC.getInstalledPackages verbosity comp packageDBs progconf
+    GHC   -> GHC.getInstalledPackages verbosity packageDBs progconf
+    GHCJS -> GHCJS.getInstalledPackages verbosity packageDBs progconf
+    Hugs  -> Hugs.getInstalledPackages verbosity packageDBs progconf
+    JHC   -> JHC.getInstalledPackages verbosity packageDBs progconf
+    LHC   -> LHC.getInstalledPackages verbosity packageDBs progconf
+    NHC   -> NHC.getInstalledPackages verbosity packageDBs progconf
+    UHC   -> UHC.getInstalledPackages verbosity comp packageDBs progconf
     HaskellSuite {} ->
       HaskellSuite.getInstalledPackages verbosity packageDBs progconf
     flv -> die $ "don't know how to find the installed packages for "
@@ -704,7 +708,7 @@ getPackageDBContents verbosity comp packageDB progconf = do
   info verbosity "Reading installed packages..."
   case compilerFlavor comp of
     GHC -> GHC.getPackageDBContents verbosity packageDB progconf
-
+    GHCJS -> GHCJS.getPackageDBContents verbosity packageDB progconf
     -- For other compilers, try to fall back on 'getInstalledPackages'.
     _   -> getInstalledPackages verbosity comp [packageDB] progconf
 
@@ -866,13 +870,14 @@ configCompilerEx :: Maybe CompilerFlavor -> Maybe FilePath -> Maybe FilePath
 configCompilerEx Nothing _ _ _ _ = die "Unknown compiler"
 configCompilerEx (Just hcFlavor) hcPath hcPkg conf verbosity = do
   (comp, maybePlatform, programsConfig) <- case hcFlavor of
-    GHC  -> GHC.configure  verbosity hcPath hcPkg conf
-    JHC  -> JHC.configure  verbosity hcPath hcPkg conf
-    LHC  -> do (_, _, ghcConf) <- GHC.configure  verbosity Nothing hcPkg conf
-               LHC.configure  verbosity hcPath Nothing ghcConf
-    Hugs -> Hugs.configure verbosity hcPath hcPkg conf
-    NHC  -> NHC.configure  verbosity hcPath hcPkg conf
-    UHC  -> UHC.configure  verbosity hcPath hcPkg conf
+    GHC   -> GHC.configure  verbosity hcPath hcPkg conf
+    GHCJS -> GHCJS.configure verbosity hcPath hcPkg conf
+    JHC   -> JHC.configure  verbosity hcPath hcPkg conf
+    LHC   -> do (_, _, ghcConf) <- GHC.configure  verbosity Nothing hcPkg conf
+                LHC.configure  verbosity hcPath Nothing ghcConf
+    Hugs  -> Hugs.configure verbosity hcPath hcPkg conf
+    NHC   -> NHC.configure  verbosity hcPath hcPkg conf
+    UHC   -> UHC.configure  verbosity hcPath hcPkg conf
     HaskellSuite {} -> HaskellSuite.configure verbosity hcPath hcPkg conf
     _    -> die "Unknown compiler"
   return (comp, fromMaybe buildPlatform maybePlatform, programsConfig)

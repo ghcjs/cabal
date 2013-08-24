@@ -704,6 +704,10 @@ data KnownExtension =
   -- * <http://www.haskell.org/ghc/docs/latest/html/users_guide/other-type-extensions.html#ambiguity>
   | AllowAmbiguousTypes
 
+  -- | Enable @foreign import javascript@
+  | JavaScriptFFI
+
+
   deriving (Show, Read, Eq, Enum, Bounded, Typeable, Data)
 
 {-# DEPRECATED knownExtensions
