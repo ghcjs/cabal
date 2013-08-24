@@ -74,7 +74,8 @@ import qualified Distribution.Simple.PackageIndex as PackageIndex
 import Distribution.Simple.CCompiler
          ( cSourceExtensions )
 import Distribution.Simple.Compiler
-         ( CompilerFlavor(..), compilerFlavor, compilerVersion )
+         ( CompilerFlavor(..), CompilerId(..), Compiler(..)
+         ,compilerFlavor, compilerVersion )
 import Distribution.Simple.LocalBuildInfo
          ( LocalBuildInfo(..), Component(..) )
 import Distribution.Simple.BuildPaths (autogenModulesDir,cppHeaderName)
@@ -87,7 +88,8 @@ import Distribution.Simple.Program
          , lookupProgram, requireProgram, requireProgramVersion
          , rawSystemProgramConf, rawSystemProgram
          , greencardProgram, cpphsProgram, hsc2hsProgram, c2hsProgram
-         , happyProgram, alexProgram, haddockProgram, ghcProgram, gccProgram )
+         , happyProgram, alexProgram, haddockProgram, ghcProgram, ghcjsProgram
+         , gccProgram )
 import Distribution.Simple.Test ( writeSimpleTestStub, stubFilePath, stubName )
 import Distribution.System
          ( OS(..), buildOS, Arch(..), Platform(..) )
@@ -364,26 +366,26 @@ ppCpp = ppCpp' []
 ppCpp' :: [String] -> BuildInfo -> LocalBuildInfo -> PreProcessor
 ppCpp' extraArgs bi lbi =
   case compilerFlavor (compiler lbi) of
-    GHC -> ppGhcCpp (cppArgs ++ extraArgs) bi lbi
-    _   -> ppCpphs  (cppArgs ++ extraArgs) bi lbi
-
+    GHC   -> ppGhcCpp ghcProgram   (>= Version [6,6] []) (cppArgs ++ extraArgs) bi lbi
+    GHCJS -> ppGhcCpp ghcjsProgram (const True)          (cppArgs ++ extraArgs) bi lbi
+    _     -> ppCpphs  (cppArgs ++ extraArgs) bi lbi
   where cppArgs = getCppOptions bi lbi
 
-ppGhcCpp :: [String] -> BuildInfo -> LocalBuildInfo -> PreProcessor
-ppGhcCpp extraArgs _bi lbi =
+ppGhcCpp :: Program -> (Version -> Bool) -> [String] -> BuildInfo -> LocalBuildInfo -> PreProcessor
+ppGhcCpp program xHs extraArgs _bi lbi =
   PreProcessor {
     platformIndependent = False,
     runPreProcessor = mkSimplePreProcessor $ \inFile outFile verbosity -> do
-      (ghcProg, ghcVersion, _) <- requireProgramVersion verbosity
-                                    ghcProgram anyVersion (withPrograms lbi)
-      rawSystemProgram verbosity ghcProg $
+      (prog, version, _) <- requireProgramVersion verbosity
+                              program anyVersion (withPrograms lbi)
+      rawSystemProgram verbosity prog $
           ["-E", "-cpp"]
           -- This is a bit of an ugly hack. We're going to
           -- unlit the file ourselves later on if appropriate,
           -- so we need GHC not to unlit it now or it'll get
           -- double-unlitted. In the future we might switch to
           -- using cpphs --unlit instead.
-       ++ (if ghcVersion >= Version [6,6] [] then ["-x", "hs"] else [])
+       ++ (if xHs version then ["-x", "hs"] else [])
        ++ (if use_optP_P lbi then ["-optP-P"] else [])
        ++ [ "-optP-include", "-optP"++ (autogenModulesDir lbi </> cppHeaderName) ]
        ++ ["-o", outFile, inFile]
@@ -481,8 +483,9 @@ ppHsc2hs bi lbi =
     isOSX = case buildOS of OSX -> True; _ -> False
     isELF = case buildOS of OSX -> False; Windows -> False; _ -> True;
     packageHacks = case compilerFlavor (compiler lbi) of
-      GHC -> hackRtsPackage
-      _   -> id
+      GHC   -> hackRtsPackage
+      GHCJS -> hackRtsPackage
+      _     -> id
     -- We don't link in the actual Haskell libraries of our dependencies, so
     -- the -u flags in the ldOptions of the rts package mean linking fails on
     -- OS X (it's ld is a tad stricter than gnu ld). Thus we remove the
@@ -546,6 +549,12 @@ platformDefines lbi =
       ["-D" ++ arch ++ "_BUILD_ARCH=1"] ++
       map (\os'   -> "-D" ++ os'   ++ "_HOST_OS=1")   osStr ++
       map (\arch' -> "-D" ++ arch' ++ "_HOST_ARCH=1") archStr
+    GHCJS ->
+      ["-D__GLASGOW_HASKELL__=" ++ versionInt parentVersion] ++
+      ["-D" ++ os   ++ "_BUILD_OS=1"] ++
+      ["-D" ++ arch ++ "_BUILD_ARCH=1"] ++
+      map (\os'   -> "-D" ++ os'   ++ "_HOST_OS=1")   osStr ++
+      map (\arch' -> "-D" ++ arch' ++ "_HOST_ARCH=1") archStr
     JHC  -> ["-D__JHC__=" ++ versionInt version]
     NHC  -> ["-D__NHC__=" ++ versionInt version]
     Hugs -> ["-D__HUGS__"]
@@ -558,6 +567,8 @@ platformDefines lbi =
     comp = compiler lbi
     Platform hostArch hostOS = hostPlatform lbi
     version = compilerVersion comp
+    parentVersion = maybe version (\(CompilerId _ v _) -> v) $
+            (\(CompilerId _ _ p) -> p) (compilerId comp)
     -- TODO: move this into the compiler abstraction
     -- FIXME: this forces GHC's crazy 4.8.2 -> 408 convention on all
     -- the other compilers. Check if that's really what they want.
@@ -610,6 +621,7 @@ ppHappy _ lbi = pp { platformIndependent = True }
   where pp = standardPP lbi happyProgram (hcFlags hc)
         hc = compilerFlavor (compiler lbi)
         hcFlags GHC = ["-agc"]
+        hcFlags GHCJS = ["-agc"]
         hcFlags _ = []
 
 ppAlex :: BuildInfo -> LocalBuildInfo -> PreProcessor
@@ -617,6 +629,7 @@ ppAlex _ lbi = pp { platformIndependent = True }
   where pp = standardPP lbi alexProgram (hcFlags hc)
         hc = compilerFlavor (compiler lbi)
         hcFlags GHC = ["-g"]
+        hcFlags GHCJS = ["-g"]
         hcFlags _ = []
 
 standardPP :: LocalBuildInfo -> Program -> [String] -> PreProcessor

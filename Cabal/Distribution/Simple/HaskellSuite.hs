@@ -72,7 +72,7 @@ configure verbosity mbHcPath hcPkgPath conf0 = do
 
       let
         comp = Compiler {
-          compilerId             = CompilerId (HaskellSuite compName) compVersion,
+          compilerId             = CompilerId (HaskellSuite compName) compVersion Nothing,
           compilerLanguages      = languages,
           compilerExtensions     = extensions,
           compilerProperties     = M.empty

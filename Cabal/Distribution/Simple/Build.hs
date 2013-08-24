@@ -54,6 +54,7 @@ module Distribution.Simple.Build (
   ) where
 
 import qualified Distribution.Simple.GHC  as GHC
+import qualified Distribution.Simple.GHCJS as GHCJS
 import qualified Distribution.Simple.JHC  as JHC
 import qualified Distribution.Simple.LHC  as LHC
 import qualified Distribution.Simple.NHC  as NHC
@@ -478,12 +479,13 @@ buildLib :: Verbosity -> Flag (Maybe Int)
                       -> Library            -> ComponentLocalBuildInfo -> IO ()
 buildLib verbosity numJobs pkg_descr lbi lib clbi =
   case compilerFlavor (compiler lbi) of
-    GHC  -> GHC.buildLib  verbosity numJobs pkg_descr lbi lib clbi
-    JHC  -> JHC.buildLib  verbosity         pkg_descr lbi lib clbi
-    LHC  -> LHC.buildLib  verbosity         pkg_descr lbi lib clbi
-    Hugs -> Hugs.buildLib verbosity         pkg_descr lbi lib clbi
-    NHC  -> NHC.buildLib  verbosity         pkg_descr lbi lib clbi
-    UHC  -> UHC.buildLib  verbosity         pkg_descr lbi lib clbi
+    GHC  -> GHC.buildLib    verbosity numJobs pkg_descr lbi lib clbi
+    GHCJS -> GHCJS.buildLib verbosity numJobs pkg_descr lbi lib clbi
+    JHC  -> JHC.buildLib    verbosity         pkg_descr lbi lib clbi
+    LHC  -> LHC.buildLib    verbosity         pkg_descr lbi lib clbi
+    Hugs -> Hugs.buildLib   verbosity         pkg_descr lbi lib clbi
+    NHC  -> NHC.buildLib    verbosity         pkg_descr lbi lib clbi
+    UHC  -> UHC.buildLib    verbosity         pkg_descr lbi lib clbi
     HaskellSuite {} -> HaskellSuite.buildLib verbosity pkg_descr lbi lib clbi
     _    -> die "Building is not supported with this compiler."
 
@@ -492,12 +494,13 @@ buildExe :: Verbosity -> Flag (Maybe Int)
                       -> Executable         -> ComponentLocalBuildInfo -> IO ()
 buildExe verbosity numJobs pkg_descr lbi exe clbi =
   case compilerFlavor (compiler lbi) of
-    GHC  -> GHC.buildExe  verbosity numJobs pkg_descr lbi exe clbi
-    JHC  -> JHC.buildExe  verbosity         pkg_descr lbi exe clbi
-    LHC  -> LHC.buildExe  verbosity         pkg_descr lbi exe clbi
-    Hugs -> Hugs.buildExe verbosity         pkg_descr lbi exe clbi
-    NHC  -> NHC.buildExe  verbosity         pkg_descr lbi exe clbi
-    UHC  -> UHC.buildExe  verbosity         pkg_descr lbi exe clbi
+    GHC  -> GHC.buildExe    verbosity numJobs pkg_descr lbi exe clbi
+    GHCJS -> GHCJS.buildExe verbosity numJobs pkg_descr lbi exe clbi
+    JHC  -> JHC.buildExe    verbosity         pkg_descr lbi exe clbi
+    LHC  -> LHC.buildExe    verbosity         pkg_descr lbi exe clbi
+    Hugs -> Hugs.buildExe   verbosity         pkg_descr lbi exe clbi
+    NHC  -> NHC.buildExe    verbosity         pkg_descr lbi exe clbi
+    UHC  -> UHC.buildExe    verbosity         pkg_descr lbi exe clbi
     _    -> die "Building is not supported with this compiler."
 
 

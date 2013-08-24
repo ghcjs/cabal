@@ -107,7 +107,7 @@ configure verbosity hcPath _hcPkgPath conf = do
 
   let Just version = programVersion jhcProg
       comp = Compiler {
-        compilerId             = CompilerId JHC version,
+        compilerId             = CompilerId JHC version Nothing,
         compilerLanguages      = jhcLanguages,
         compilerExtensions     = jhcLanguageExtensions,
         compilerProperties     = M.empty

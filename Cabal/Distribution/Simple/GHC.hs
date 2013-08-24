@@ -188,7 +188,7 @@ configure verbosity hcPath hcPkgPath conf0 = do
   let ghcInfoMap = M.fromList ghcInfo
 
   let comp = Compiler {
-        compilerId         = CompilerId GHC ghcVersion,
+        compilerId         = CompilerId GHC ghcVersion Nothing,
         compilerLanguages  = languages,
         compilerExtensions = extensions,
         compilerProperties = ghcInfoMap
