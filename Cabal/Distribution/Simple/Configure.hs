@@ -129,14 +129,15 @@ import Distribution.Verbosity
 import Distribution.Simple.Program.Db
     ( lookupProgram )
 import Distribution.Simple.Program.Builtin
-    ( ghcProgram )
+    ( ghcProgram, ghcjsProgram )
 
-import qualified Distribution.Simple.GHC  as GHC
-import qualified Distribution.Simple.JHC  as JHC
-import qualified Distribution.Simple.LHC  as LHC
-import qualified Distribution.Simple.NHC  as NHC
-import qualified Distribution.Simple.Hugs as Hugs
-import qualified Distribution.Simple.UHC  as UHC
+import qualified Distribution.Simple.GHC   as GHC
+import qualified Distribution.Simple.GHCJS as GHCJS
+import qualified Distribution.Simple.JHC   as JHC
+import qualified Distribution.Simple.LHC   as LHC
+import qualified Distribution.Simple.NHC   as NHC
+import qualified Distribution.Simple.Hugs  as Hugs
+import qualified Distribution.Simple.UHC   as UHC
 
 import Control.Monad
     ( when, unless, foldM, filterM )
@@ -496,6 +497,7 @@ configure (pkg_descr0, pbi) cfg
                 then return False
                 else case flavor of
                             GHC | version >= Version [6,5] [] -> return True
+                            GHCJS                             -> return True
                             _ -> do warn verbosity
                                          ("this compiler does not support " ++
                                           "--enable-split-objs; ignoring")
@@ -504,12 +506,17 @@ configure (pkg_descr0, pbi) cfg
 
         sharedLibsByDefault <-
             case compilerId comp of
-            CompilerId GHC _ ->
+            CompilerId GHC _ _ ->
                 case lookupProgram ghcProgram programsConfig''' of
                 Just ghcProg ->
                     -- if ghc is dynamic, then ghci needs a shared
                     -- library, so we build one by default.
                     GHC.ghcDynamic verbosity ghcProg
+                Nothing -> return False
+            CompilerId GHCJS _ _ ->
+                case lookupProgram ghcjsProgram programsConfig''' of
+                Just ghcjsProg ->
+                    GHCJS.ghcDynamic verbosity ghcjsProg
                 Nothing -> return False
             _ -> return False
 
@@ -690,14 +697,15 @@ getInstalledPackages verbosity comp packageDBs progconf = do
 
   info verbosity "Reading installed packages..."
   case compilerFlavor comp of
-    GHC -> GHC.getInstalledPackages verbosity packageDBs progconf
-    Hugs->Hugs.getInstalledPackages verbosity packageDBs progconf
-    JHC -> JHC.getInstalledPackages verbosity packageDBs progconf
-    LHC -> LHC.getInstalledPackages verbosity packageDBs progconf
-    NHC -> NHC.getInstalledPackages verbosity packageDBs progconf
-    UHC -> UHC.getInstalledPackages verbosity comp packageDBs progconf
-    flv -> die $ "don't know how to find the installed packages for "
-              ++ display flv
+    GHC   -> GHC.getInstalledPackages   verbosity packageDBs progconf
+    GHCJS -> GHCJS.getInstalledPackages verbosity packageDBs progconf
+    Hugs  -> Hugs.getInstalledPackages  verbosity packageDBs progconf
+    JHC   -> JHC.getInstalledPackages   verbosity packageDBs progconf
+    LHC   -> LHC.getInstalledPackages   verbosity packageDBs progconf
+    NHC   -> NHC.getInstalledPackages   verbosity packageDBs progconf
+    UHC   -> UHC.getInstalledPackages   verbosity comp packageDBs progconf
+    flv   -> die $ "don't know how to find the installed packages for "
+                ++ display flv
 
 -- | Like 'getInstalledPackages', but for a single package DB.
 getPackageDBContents :: Verbosity -> Compiler
@@ -707,7 +715,7 @@ getPackageDBContents verbosity comp packageDB progconf = do
   info verbosity "Reading installed packages..."
   case compilerFlavor comp of
     GHC -> GHC.getPackageDBContents verbosity packageDB progconf
-
+    GHCJS -> GHCJS.getPackageDBContents verbosity packageDB progconf
     -- For other compilers, try to fall back on 'getInstalledPackages'.
     _   -> getInstalledPackages verbosity comp [packageDB] progconf
 
@@ -868,14 +876,15 @@ configCompiler :: Maybe CompilerFlavor -> Maybe FilePath -> Maybe FilePath
 configCompiler Nothing _ _ _ _ = die "Unknown compiler"
 configCompiler (Just hcFlavor) hcPath hcPkg conf verbosity = do
   (comp, maybePlatform, programsConfig) <- case hcFlavor of
-    GHC  -> GHC.configure  verbosity hcPath hcPkg conf
-    JHC  -> JHC.configure  verbosity hcPath hcPkg conf
-    LHC  -> do (_, _, ghcConf) <- GHC.configure  verbosity Nothing hcPkg conf
-               LHC.configure  verbosity hcPath Nothing ghcConf
-    Hugs -> Hugs.configure verbosity hcPath hcPkg conf
-    NHC  -> NHC.configure  verbosity hcPath hcPkg conf
-    UHC  -> UHC.configure  verbosity hcPath hcPkg conf
-    _    -> die "Unknown compiler"
+    GHC   -> GHC.configure   verbosity hcPath hcPkg conf
+    GHCJS -> GHCJS.configure verbosity hcPath hcPkg conf
+    JHC   -> JHC.configure   verbosity hcPath hcPkg conf
+    LHC   -> do (_, _, ghcConf) <- GHC.configure  verbosity Nothing hcPkg conf
+                LHC.configure  verbosity hcPath Nothing ghcConf
+    Hugs  -> Hugs.configure  verbosity hcPath hcPkg conf
+    NHC   -> NHC.configure   verbosity hcPath hcPkg conf
+    UHC   -> UHC.configure   verbosity hcPath hcPkg conf
+    _     -> die "Unknown compiler"
   return (comp, fromMaybe buildPlatform maybePlatform, programsConfig)
 
 
@@ -1109,47 +1118,52 @@ checkForeignDeps pkg lbi verbosity = do
         hcDefines :: Compiler -> [String]
         hcDefines comp =
           case compilerFlavor comp of
-            GHC  ->
-                let ghcOS = case hostOS of
-                            Linux     -> ["linux"]
-                            Windows   -> ["mingw32"]
-                            OSX       -> ["darwin"]
-                            FreeBSD   -> ["freebsd"]
-                            OpenBSD   -> ["openbsd"]
-                            NetBSD    -> ["netbsd"]
-                            Solaris   -> ["solaris2"]
-                            AIX       -> ["aix"]
-                            HPUX      -> ["hpux"]
-                            IRIX      -> ["irix"]
-                            HaLVM     -> []
-                            IOS       -> ["ios"]
-                            OtherOS _ -> []
-                    ghcArch = case hostArch of
-                              I386        -> ["i386"]
-                              X86_64      -> ["x86_64"]
-                              PPC         -> ["powerpc"]
-                              PPC64       -> ["powerpc64"]
-                              Sparc       -> ["sparc"]
-                              Arm         -> ["arm"]
-                              Mips        -> ["mips"]
-                              SH          -> []
-                              IA64        -> ["ia64"]
-                              S390        -> ["s390"]
-                              Alpha       -> ["alpha"]
-                              Hppa        -> ["hppa"]
-                              Rs6000      -> ["rs6000"]
-                              M68k        -> ["m68k"]
-                              Vax         -> ["vax"]
-                              OtherArch _ -> []
-                in ["-D__GLASGOW_HASKELL__=" ++ versionInt version] ++
-                   map (\os   -> "-D" ++ os   ++ "_HOST_OS=1")   ghcOS ++
-                   map (\arch -> "-D" ++ arch ++ "_HOST_ARCH=1") ghcArch
+            GHC  -> ["-D__GLASGOW_HASKELL__=" ++ versionInt version] ++
+                    map (\os   -> "-D" ++ os   ++ "_HOST_OS=1")   ghcOS ++
+                    map (\arch -> "-D" ++ arch ++ "_HOST_ARCH=1") ghcArch
+            GHCJS -> ["-D__GLASGOW_HASKELL__=" ++ versionInt parentVersion] ++
+                     map (\os   -> "-D" ++ os   ++ "_HOST_OS=1")   ghcOS ++
+                     map (\arch -> "-D" ++ arch ++ "_HOST_ARCH=1") ghcArch
             JHC  -> ["-D__JHC__=" ++ versionInt version]
             NHC  -> ["-D__NHC__=" ++ versionInt version]
             Hugs -> ["-D__HUGS__"]
             _    -> []
           where
             Platform hostArch hostOS = hostPlatform lbi
+            ghcOS = case hostOS of
+                    Linux     -> ["linux"]
+                    Windows   -> ["mingw32"]
+                    OSX       -> ["darwin"]
+                    FreeBSD   -> ["freebsd"]
+                    OpenBSD   -> ["openbsd"]
+                    NetBSD    -> ["netbsd"]
+                    Solaris   -> ["solaris2"]
+                    AIX       -> ["aix"]
+                    HPUX      -> ["hpux"]
+                    IRIX      -> ["irix"]
+                    HaLVM     -> []
+                    IOS       -> ["ios"]
+                    OtherOS _ -> []
+            ghcArch = case hostArch of
+                      I386        -> ["i386"]
+                      X86_64      -> ["x86_64"]
+                      PPC         -> ["powerpc"]
+                      PPC64       -> ["powerpc64"]
+                      Sparc       -> ["sparc"]
+                      Arm         -> ["arm"]
+                      Mips        -> ["mips"]
+                      SH          -> []
+                      IA64        -> ["ia64"]
+                      S390        -> ["s390"]
+                      Alpha       -> ["alpha"]
+                      Hppa        -> ["hppa"]
+                      Rs6000      -> ["rs6000"]
+                      M68k        -> ["m68k"]
+                      Vax         -> ["vax"]
+                      OtherArch _ -> []
+
+            parentVersion = maybe version (\(CompilerId _ v _) -> v) $
+               (\(CompilerId _ _ p) -> p) (compilerId comp)
             version = compilerVersion comp
                       -- TODO: move this into the compiler abstraction
             -- FIXME: this forces GHC's crazy 4.8.2 -> 408 convention on all

@@ -1246,7 +1246,7 @@ installUnpackedPackage verbosity buildLimit installLock numJobs
                               defInstallDirs (configInstallDirs configFlags)
           }
         where
-          CompilerId flavor _ = compid
+          CompilerId flavor _ _ = compid
           env         = initialPathTemplateEnv pkgid compid platform
           userInstall = fromFlagOrDefault defaultUserInstall
                         (configUserInstall configFlags')
@@ -1319,7 +1319,7 @@ withWin32SelfUpgrade verbosity configFlags compid platform pkg action = do
 
   where
     pkgid = packageId pkg
-    (CompilerId compFlavor _) = compid
+    (CompilerId compFlavor _ _) = compid
 
     exeInstallPaths defaultDirs =
       [ InstallDirs.bindir absoluteDirs </> exeName <.> exeExtension

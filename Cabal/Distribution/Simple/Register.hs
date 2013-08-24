@@ -72,17 +72,18 @@ import Distribution.Simple.LocalBuildInfo
          , LibraryName(..)
          , InstallDirs(..), absoluteInstallDirs )
 import Distribution.Simple.BuildPaths (haddockName)
-import qualified Distribution.Simple.GHC  as GHC
-import qualified Distribution.Simple.LHC  as LHC
-import qualified Distribution.Simple.Hugs as Hugs
-import qualified Distribution.Simple.UHC  as UHC
+import qualified Distribution.Simple.GHC   as GHC
+import qualified Distribution.Simple.GHCJS as GHCJS
+import qualified Distribution.Simple.LHC   as LHC
+import qualified Distribution.Simple.Hugs  as Hugs
+import qualified Distribution.Simple.UHC   as UHC
 import Distribution.Simple.Compiler
          ( compilerVersion, Compiler, CompilerFlavor(..), compilerFlavor
          , PackageDBStack, registrationPackageDB )
 import Distribution.Simple.Program
          ( ProgramConfiguration, ConfiguredProgram
          , runProgramInvocation, requireProgram, lookupProgram
-         , ghcPkgProgram, lhcPkgProgram )
+         , ghcPkgProgram, ghcjsPkgProgram, lhcPkgProgram )
 import Distribution.Simple.Program.Script
          ( invocationAsSystemScript )
 import qualified Distribution.Simple.Program.HcPkg as HcPkg
@@ -161,15 +162,17 @@ register pkg@PackageDescription { library       = Just lib  } lbi regFlags
 
     writeRegisterScript installedPkgInfo =
       case compilerFlavor (compiler lbi) of
-        GHC  -> do (ghcPkg, _) <- requireProgram verbosity ghcPkgProgram (withPrograms lbi)
-                   writeHcPkgRegisterScript verbosity installedPkgInfo ghcPkg packageDbs
-        LHC  -> do (lhcPkg, _) <- requireProgram verbosity lhcPkgProgram (withPrograms lbi)
-                   writeHcPkgRegisterScript verbosity installedPkgInfo lhcPkg packageDbs
-        Hugs -> notice verbosity "Registration scripts not needed for hugs"
-        JHC  -> notice verbosity "Registration scripts not needed for jhc"
-        NHC  -> notice verbosity "Registration scripts not needed for nhc98"
-        UHC  -> notice verbosity "Registration scripts not needed for uhc"
-        _    -> die "Registration scripts are not implemented for this compiler"
+        GHC   -> do (ghcPkg, _) <- requireProgram verbosity ghcPkgProgram (withPrograms lbi)
+                    writeHcPkgRegisterScript verbosity installedPkgInfo ghcPkg packageDbs
+        GHCJS -> do (ghcjsPkg, _) <- requireProgram verbosity ghcjsPkgProgram (withPrograms lbi)
+                    writeHcPkgRegisterScript verbosity installedPkgInfo ghcjsPkg packageDbs
+        LHC   -> do (lhcPkg, _) <- requireProgram verbosity lhcPkgProgram (withPrograms lbi)
+                    writeHcPkgRegisterScript verbosity installedPkgInfo lhcPkg packageDbs
+        Hugs  -> notice verbosity "Registration scripts not needed for hugs"
+        JHC   -> notice verbosity "Registration scripts not needed for jhc"
+        NHC   -> notice verbosity "Registration scripts not needed for nhc98"
+        UHC   -> notice verbosity "Registration scripts not needed for uhc"
+        _     -> die "Registration scripts are not implemented for this compiler"
 
 register _ _ regFlags = notice verbosity "No package to register"
   where
@@ -195,6 +198,9 @@ generateRegistrationInfo verbosity pkg lib lbi clbi inplace distPref = do
     case compilerFlavor comp of
      GHC | compilerVersion comp >= Version [6,11] [] -> do
             s <- GHC.libAbiHash verbosity pkg lbi lib clbi
+            return (InstalledPackageId (display (packageId pkg) ++ '-':s))
+     GHCJS -> do
+            s <- GHCJS.libAbiHash verbosity pkg lbi lib clbi
             return (InstalledPackageId (display (packageId pkg) ++ '-':s))
      _other -> do
             return (InstalledPackageId (display (packageId pkg)))
@@ -240,13 +246,14 @@ registerPackage verbosity installedPkgInfo pkg lbi inplace packageDbs = do
             else "Registering"
   setupMessage verbosity msg (packageId pkg)
   case compilerFlavor (compiler lbi) of
-    GHC  -> GHC.registerPackage  verbosity installedPkgInfo pkg lbi inplace packageDbs
-    LHC  -> LHC.registerPackage  verbosity installedPkgInfo pkg lbi inplace packageDbs
-    Hugs -> Hugs.registerPackage verbosity installedPkgInfo pkg lbi inplace packageDbs
-    UHC  -> UHC.registerPackage  verbosity installedPkgInfo pkg lbi inplace packageDbs
-    JHC  -> notice verbosity "Registering for jhc (nothing to do)"
-    NHC  -> notice verbosity "Registering for nhc98 (nothing to do)"
-    _    -> die "Registering is not implemented for this compiler"
+    GHC   -> GHC.registerPackage  verbosity installedPkgInfo pkg lbi inplace packageDbs
+    GHCJS -> GHCJS.registerPackage  verbosity installedPkgInfo pkg lbi inplace packageDbs
+    LHC   -> LHC.registerPackage  verbosity installedPkgInfo pkg lbi inplace packageDbs
+    Hugs  -> Hugs.registerPackage verbosity installedPkgInfo pkg lbi inplace packageDbs
+    UHC   -> UHC.registerPackage  verbosity installedPkgInfo pkg lbi inplace packageDbs
+    JHC   -> notice verbosity "Registering for jhc (nothing to do)"
+    NHC   -> notice verbosity "Registering for nhc98 (nothing to do)"
+    _     -> die "Registering is not implemented for this compiler"
 
 
 writeHcPkgRegisterScript :: Verbosity
@@ -404,6 +411,14 @@ unregister pkg lbi regFlags = do
            then writeFileAtomic unregScriptFileName
                   (BS.Char8.pack $ invocationAsSystemScript buildOS invocation)
             else runProgramInvocation verbosity invocation
+    GHCJS ->
+      let Just ghcjsPkg = lookupProgram ghcjsPkgProgram (withPrograms lbi)
+          invocation = HcPkg.unregisterInvocation ghcjsPkg Verbosity.normal
+                         packageDb pkgid
+      in if genScript
+           then writeFileAtomic unregScriptFileName
+                  (BS.Char8.pack $ invocationAsSystemScript buildOS invocation)
+            else runProgramInvocation verbosity invocation
     Hugs -> do
         _ <- tryIO $ removeDirectoryRecursive (libdir installDirs)
         return ()
@@ -411,7 +426,7 @@ unregister pkg lbi regFlags = do
         _ <- tryIO $ removeDirectoryRecursive (libdir installDirs)
         return ()
     _ ->
-        die ("only unregistering with GHC and Hugs is implemented")
+        die ("only unregistering with GHC, GHCJS, NHC and Hugs is implemented")
 
 unregScriptFileName :: FilePath
 unregScriptFileName = case buildOS of

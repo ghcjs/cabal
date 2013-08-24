@@ -73,17 +73,17 @@ import qualified System.Info (compilerName, compilerVersion)
 import Distribution.Text (Text(..), display)
 import qualified Distribution.Compat.ReadP as Parse
 import qualified Text.PrettyPrint as Disp
-import Text.PrettyPrint ((<>))
+import Text.PrettyPrint ((<>), empty)
 
 import qualified Data.Char as Char (toLower, isDigit, isAlphaNum)
 import Control.Monad (when)
 
-data CompilerFlavor = GHC | NHC | YHC | Hugs | HBC | Helium | JHC | LHC | UHC
+data CompilerFlavor = GHC | GHCJS | NHC | YHC | Hugs | HBC | Helium | JHC | LHC | UHC
                     | OtherCompiler String
   deriving (Show, Read, Eq, Ord, Typeable, Data)
 
 knownCompilerFlavors :: [CompilerFlavor]
-knownCompilerFlavors = [GHC, NHC, YHC, Hugs, HBC, Helium, JHC, LHC, UHC]
+knownCompilerFlavors = [GHC, GHCJS, NHC, YHC, Hugs, HBC, Helium, JHC, LHC, UHC]
 
 instance Text CompilerFlavor where
   disp (OtherCompiler name) = Disp.text name
@@ -134,7 +134,7 @@ buildCompilerVersion :: Version
 buildCompilerVersion = System.Info.compilerVersion
 
 buildCompilerId :: CompilerId
-buildCompilerId = CompilerId buildCompilerFlavor buildCompilerVersion
+buildCompilerId = CompilerId buildCompilerFlavor buildCompilerVersion Nothing
 
 -- | The default compiler flavour to pick when compiling stuff. This defaults
 -- to the compiler used to build the Cabal lib.
@@ -151,17 +151,20 @@ defaultCompilerFlavor = case buildCompilerFlavor of
 -- * Compiler Id
 -- ------------------------------------------------------------
 
-data CompilerId = CompilerId CompilerFlavor Version
+data CompilerId = CompilerId CompilerFlavor Version (Maybe CompilerId)
   deriving (Eq, Ord, Read, Show)
 
 instance Text CompilerId where
-  disp (CompilerId f (Version [] _)) = disp f
-  disp (CompilerId f v) = disp f <> Disp.char '-' <> disp v
+  disp (CompilerId f (Version [] _) sub) = disp f <>
+    maybe empty ((Disp.char '_' <>) . disp) sub
+  disp (CompilerId f v sub) = disp f <> Disp.char '-' <> disp v <>
+    maybe empty ((Disp.char '_' <>) . disp) sub
 
   parse = do
     flavour <- parse
     version <- (Parse.char '-' >> parse) Parse.<++ return (Version [] [])
-    return (CompilerId flavour version)
+    subId   <- (Parse.char '_' >> parse >>= return . Just) Parse.<++ return Nothing
+    return (CompilerId flavour version subId)
 
 lowercase :: String -> String
 lowercase = map Char.toLower

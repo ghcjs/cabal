@@ -52,12 +52,13 @@ module Distribution.Simple.Build (
     writeAutogenFiles,
   ) where
 
-import qualified Distribution.Simple.GHC  as GHC
-import qualified Distribution.Simple.JHC  as JHC
-import qualified Distribution.Simple.LHC  as LHC
-import qualified Distribution.Simple.NHC  as NHC
-import qualified Distribution.Simple.Hugs as Hugs
-import qualified Distribution.Simple.UHC  as UHC
+import qualified Distribution.Simple.GHC   as GHC
+import qualified Distribution.Simple.GHCJS as GHCJS
+import qualified Distribution.Simple.JHC   as JHC
+import qualified Distribution.Simple.LHC   as LHC
+import qualified Distribution.Simple.NHC   as NHC
+import qualified Distribution.Simple.Hugs  as Hugs
+import qualified Distribution.Simple.UHC   as UHC
 
 import qualified Distribution.Simple.Build.Macros      as Build.Macros
 import qualified Distribution.Simple.Build.PathsModule as Build.PathsModule
@@ -464,25 +465,27 @@ buildLib :: Verbosity -> PackageDescription -> LocalBuildInfo
                       -> Library            -> ComponentLocalBuildInfo -> IO ()
 buildLib verbosity pkg_descr lbi lib clbi =
   case compilerFlavor (compiler lbi) of
-    GHC  -> GHC.buildLib  verbosity pkg_descr lbi lib clbi
-    JHC  -> JHC.buildLib  verbosity pkg_descr lbi lib clbi
-    LHC  -> LHC.buildLib  verbosity pkg_descr lbi lib clbi
-    Hugs -> Hugs.buildLib verbosity pkg_descr lbi lib clbi
-    NHC  -> NHC.buildLib  verbosity pkg_descr lbi lib clbi
-    UHC  -> UHC.buildLib  verbosity pkg_descr lbi lib clbi
-    _    -> die "Building is not supported with this compiler."
+    GHC   -> GHC.buildLib   verbosity pkg_descr lbi lib clbi
+    GHCJS -> GHCJS.buildLib verbosity pkg_descr lbi lib clbi
+    JHC   -> JHC.buildLib   verbosity pkg_descr lbi lib clbi
+    LHC   -> LHC.buildLib   verbosity pkg_descr lbi lib clbi
+    Hugs  -> Hugs.buildLib  verbosity pkg_descr lbi lib clbi
+    NHC   -> NHC.buildLib   verbosity pkg_descr lbi lib clbi
+    UHC   -> UHC.buildLib   verbosity pkg_descr lbi lib clbi
+    _     -> die "Building is not supported with this compiler."
 
 buildExe :: Verbosity -> PackageDescription -> LocalBuildInfo
                       -> Executable         -> ComponentLocalBuildInfo -> IO ()
 buildExe verbosity pkg_descr lbi exe clbi =
   case compilerFlavor (compiler lbi) of
-    GHC  -> GHC.buildExe  verbosity pkg_descr lbi exe clbi
-    JHC  -> JHC.buildExe  verbosity pkg_descr lbi exe clbi
-    LHC  -> LHC.buildExe  verbosity pkg_descr lbi exe clbi
-    Hugs -> Hugs.buildExe verbosity pkg_descr lbi exe clbi
-    NHC  -> NHC.buildExe  verbosity pkg_descr lbi exe clbi
-    UHC  -> UHC.buildExe  verbosity pkg_descr lbi exe clbi
-    _    -> die "Building is not supported with this compiler."
+    GHC   -> GHC.buildExe   verbosity pkg_descr lbi exe clbi
+    GHCJS -> GHCJS.buildExe verbosity pkg_descr lbi exe clbi
+    JHC   -> JHC.buildExe   verbosity pkg_descr lbi exe clbi
+    LHC   -> LHC.buildExe   verbosity pkg_descr lbi exe clbi
+    Hugs  -> Hugs.buildExe  verbosity pkg_descr lbi exe clbi
+    NHC   -> NHC.buildExe   verbosity pkg_descr lbi exe clbi
+    UHC   -> UHC.buildExe   verbosity pkg_descr lbi exe clbi
+    _     -> die "Building is not supported with this compiler."
 
 
 replLib :: Verbosity -> PackageDescription -> LocalBuildInfo

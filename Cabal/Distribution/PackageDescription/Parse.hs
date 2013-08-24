@@ -415,7 +415,6 @@ binfoFieldDescrs =
  , listField   "c-sources"
            showFilePath       parseFilePathQ
            cSources           (\paths binfo -> binfo{cSources=paths})
-
  , simpleField "default-language"
            (maybe empty disp) (option Nothing (fmap Just parseLanguageQ))
            defaultLanguage    (\lang  binfo -> binfo{defaultLanguage=lang})
