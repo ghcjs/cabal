@@ -84,27 +84,29 @@ configure verbosity hcPath hcPkgPath conf0 = do
     ++ " was built with GHC version " ++ display ghcjsPkgGhcVersion
 
   -- be sure to use our versions of hsc2hs, c2hs and ghc
-  let hsc2hsProgram' = 
+  let hsc2hsProgram' =
         hsc2hsProgram { programFindLocation =
                           guessHsc2hsFromGhcjsPath ghcjsProg }
       c2hsProgram' =
         c2hsProgram { programFindLocation =
                           guessC2hsFromGhcjsPath ghcjsProg }
+
       ghcProg' = ghcjsProg { programId      = "ghc"
                            , programVersion = Just ghcjsGhcVersion
                            }
       ghcPkgProg' = ghcjsPkgProg
                            { programId      = "ghc-pkg"
                            , programVersion =  Just ghcjsPkgGhcVersion
-                           } 
+                           }
       conf3 = updateProgram ghcProg'
             $ updateProgram ghcPkgProg'
             $ addKnownPrograms [ hsc2hsProgram', c2hsProgram'] conf2
 
   languages  <- getLanguages  verbosity ghcjsProg
   extensions <- getExtensions verbosity ghcjsProg
+  let ghcjsProg' = ghcjsProg { programVersion = Just ghcjsGhcVersion }
 
-  ghcInfo <- GHC.getGhcInfo verbosity ghcjsProg
+  ghcInfo <- GHC.getGhcInfo verbosity ghcjsProg'
   let ghcInfoMap = M.fromList ghcInfo
 
   let comp = Compiler {
@@ -116,8 +118,7 @@ configure verbosity hcPath hcPkgPath conf0 = do
       }
       compPlatform = Base.targetPlatform ghcInfo
   -- configure gcc and ld
-  let ghcjsProg' = ghcjsProg { programVersion = Just ghcjsGhcVersion }
-      conf4      = Base.configureToolchain ghcjsProg' ghcInfoMap conf3
+  let conf4      = Base.configureToolchain ghcjsProg' ghcInfoMap conf3
   return (comp, compPlatform, conf4)
 
 getLanguages :: Verbosity -> ConfiguredProgram -> IO [(Language, Flag)]
