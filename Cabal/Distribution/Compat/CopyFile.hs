@@ -2,6 +2,8 @@
 {-# OPTIONS_HADDOCK hide #-}
 module Distribution.Compat.CopyFile (
   copyFile,
+  copyFileChanged,
+  filesEqual,
   copyOrdinaryFile,
   copyExecutableFile,
   setFileOrdinary,
@@ -11,21 +13,23 @@ module Distribution.Compat.CopyFile (
 
 
 import Control.Monad
-         ( when )
+         ( when, unless )
 import Control.Exception
          ( bracket, bracketOnError, throwIO )
+import qualified Data.ByteString.Lazy as BSL
 import Distribution.Compat.Exception
          ( catchIO )
 import System.IO.Error
          ( ioeSetLocation )
 import System.Directory
-         ( renameFile, removeFile )
+         ( doesFileExist, renameFile, removeFile )
 import Distribution.Compat.TempFile
          ( openBinaryTempFile )
 import System.FilePath
          ( takeDirectory )
 import System.IO
-         ( openBinaryFile, IOMode(ReadMode), hClose, hGetBuf, hPutBuf )
+         ( openBinaryFile, IOMode(ReadMode), hClose, hGetBuf, hPutBuf
+         , withBinaryFile )
 import Foreign
          ( allocaBytes )
 
@@ -59,6 +63,8 @@ setFileExecutable _ = return ()
 -- This happens to be true on Unix and currently on Windows too:
 setDirOrdinary = setFileExecutable
 
+-- | Copies a file to a new destination.
+-- Often you should use `copyFileChanged` instead.
 copyFile :: FilePath -> FilePath -> IO ()
 copyFile fromFPath toFPath =
   copy
@@ -79,3 +85,25 @@ copyFile fromFPath toFPath =
                   when (count > 0) $ do
                           hPutBuf hTo buffer count
                           copyContents hFrom hTo buffer
+
+-- | Like `copyFile`, but does not touch the target if source and destination
+-- are already byte-identical. This is recommended as it is useful for
+-- time-stamp based recompilation avoidance.
+copyFileChanged :: FilePath -> FilePath -> IO ()
+copyFileChanged src dest = do
+  equal <- filesEqual src dest
+  unless equal $ copyFile src dest
+
+-- | Checks if two files are byte-identical.
+-- Returns False if either of the files do not exist.
+filesEqual :: FilePath -> FilePath -> IO Bool
+filesEqual f1 f2 = do
+  ex1 <- doesFileExist f1
+  ex2 <- doesFileExist f2
+  if not (ex1 && ex2) then return False else do
+
+    withBinaryFile f1 ReadMode $ \h1 ->
+      withBinaryFile f2 ReadMode $ \h2 -> do
+        c1 <- BSL.hGetContents h1
+        c2 <- BSL.hGetContents h2
+        return $! c1 == c2

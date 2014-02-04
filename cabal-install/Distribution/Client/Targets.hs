@@ -70,7 +70,7 @@ import Distribution.Text
          ( Text(..), display )
 import Distribution.Verbosity (Verbosity)
 import Distribution.Simple.Utils
-         ( die, warn, intercalate, findPackageDesc, fromUTF8, lowercase )
+         ( die, warn, intercalate, tryFindPackageDesc, fromUTF8, lowercase )
 
 import Data.List
          ( find, nub )
@@ -176,7 +176,6 @@ data PackageSpecifier pkg =
      --
    | SpecificSourcePackage pkg
   deriving Show
-
 
 pkgSpecifierTarget :: Package pkg => PackageSpecifier pkg -> PackageName
 pkgSpecifierTarget (NamedPackage name _)       = name
@@ -423,7 +422,7 @@ expandUserTarget worldFile userTarget = case userTarget of
 
     UserTargetLocalCabalFile file -> do
       let dir = takeDirectory file
-      _   <- findPackageDesc dir -- just as a check
+      _   <- tryFindPackageDesc dir -- just as a check
       return [ PackageTargetLocation (LocalUnpackedPackage dir) ]
 
     UserTargetLocalTarball tarballFile ->
@@ -469,7 +468,7 @@ readPackageTarget verbosity target = case target of
     PackageTargetLocation location -> case location of
 
       LocalUnpackedPackage dir -> do
-        pkg <- readPackageDescription verbosity =<< findPackageDesc dir
+        pkg <- readPackageDescription verbosity =<< tryFindPackageDesc dir
         return $ PackageTargetLocation $
                    SourcePackage {
                      packageInfoId        = packageId pkg,

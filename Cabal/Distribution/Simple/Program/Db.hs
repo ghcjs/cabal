@@ -42,6 +42,7 @@ module Distribution.Simple.Program.Db (
     userSpecifiedArgs,
     lookupProgram,
     updateProgram,
+    configuredPrograms,
 
     -- ** Query and manipulate the program db
     configureProgram,
@@ -60,7 +61,7 @@ import Distribution.Simple.Program.Find
 import Distribution.Simple.Program.Builtin
          ( builtinPrograms )
 import Distribution.Simple.Utils
-         ( die )
+         ( die, doesExecutableExist )
 import Distribution.Version
          ( Version, VersionRange, isAnyVersion, withinRange )
 import Distribution.Text
@@ -75,9 +76,6 @@ import Data.Maybe
 import qualified Data.Map as Map
 import Control.Monad
          ( join, foldM )
-import System.Directory
-         ( doesFileExist )
-
 
 -- ------------------------------------------------------------
 -- * Programs database
@@ -268,6 +266,10 @@ updateProgram prog = updateConfiguredProgs $
   Map.insert (programId prog) prog
 
 
+-- | List all configured programs.
+configuredPrograms :: ProgramDb -> [ConfiguredProgram]
+configuredPrograms = Map.elems . configuredProgs
+
 -- ---------------------------
 -- Configuring known programs
 
@@ -295,13 +297,15 @@ configureProgram verbosity prog conf = do
     Nothing   -> programFindLocation prog verbosity (progSearchPath conf)
              >>= return . fmap FoundOnSystem
     Just path -> do
-      absolute <- doesFileExist path
+      absolute <- doesExecutableExist path
       if absolute
         then return (Just (UserSpecified path))
         else findProgramOnSearchPath verbosity (progSearchPath conf) path
          >>= maybe (die notFound) (return . Just . UserSpecified)
-      where notFound = "Cannot find the program '" ++ name ++ "' at '"
-                     ++ path ++ "' or on the path"
+      where notFound = "Cannot find the program '" ++ name
+                     ++ "'. User-specified path '"
+                     ++ path ++ "' does not refer to an executable and "
+                     ++ "the program is not on the system path."
   case maybeLocation of
     Nothing -> return conf
     Just location -> do

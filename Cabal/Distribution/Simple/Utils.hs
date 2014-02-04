@@ -84,6 +84,7 @@ module Distribution.Simple.Utils (
         installDirectoryContents,
 
         -- * File permissions
+        doesExecutableExist,
         setFileOrdinary,
         setFileExecutable,
 
@@ -110,6 +111,7 @@ module Distribution.Simple.Utils (
 
         -- * modification time
         moreRecentFile,
+        existsAndIsMoreRecentThan,
 
         -- * temp files and dirs
         TempFileOptions(..), defaultTempFileOptions,
@@ -119,6 +121,7 @@ module Distribution.Simple.Utils (
         -- * .cabal and .buildinfo files
         defaultPackageDesc,
         findPackageDesc,
+        tryFindPackageDesc,
         defaultHookedPackageDesc,
         findHookedPackageDesc,
 
@@ -146,7 +149,7 @@ module Distribution.Simple.Utils (
   ) where
 
 import Control.Monad
-    ( when, unless, filterM )
+    ( join, when, unless, filterM )
 import Control.Concurrent.MVar
     ( newEmptyMVar, putMVar, takeMVar )
 import Data.List
@@ -408,10 +411,10 @@ syncProcess fun c = do
   -- in the child (using SIG_DFL isn't really correct, it should be the
   -- original signal handler, but the GHC RTS will have already set up
   -- its own handler and we don't want to use that).
-  (_,_,_,p) <- Exception.bracket (installHandlers) (restoreHandlers) $
-               (\_ -> runGenProcess_ fun c
-                      (Just defaultSignal) (Just defaultSignal))
-  r <- waitForProcess p
+  r <- Exception.bracket (installHandlers) (restoreHandlers) $
+       (\_ -> do (_,_,_,p) <- runGenProcess_ fun c
+                              (Just defaultSignal) (Just defaultSignal)
+                 waitForProcess p)
   return r
     where
       installHandlers = do
@@ -811,6 +814,14 @@ moreRecentFile a b = do
             ta <- getModificationTime a
             return (ta > tb)
 
+-- | Like 'moreRecentFile', but also checks that the first file exists.
+existsAndIsMoreRecentThan :: FilePath -> FilePath -> IO Bool
+existsAndIsMoreRecentThan a b = do
+  exists <- doesFileExist a
+  if not exists
+    then return False
+    else a `moreRecentFile` b
+
 ----------------------------------------
 -- Copying and installing files and dirs
 
@@ -971,6 +982,18 @@ installDirectoryContents verbosity srcDir destDir = do
   srcFiles <- getDirectoryContentsRecursive srcDir
   installOrdinaryFiles verbosity destDir [ (srcDir, f) | f <- srcFiles ]
 
+-------------------
+-- File permissions
+
+-- | Like 'doesFileExist', but also checks that the file is executable.
+doesExecutableExist :: FilePath -> IO Bool
+doesExecutableExist f = do
+  exists <- doesFileExist f
+  if exists
+    then do perms <- getPermissions f
+            return (executable perms)
+    else return False
+
 ---------------------------------
 -- Deprecated file copy functions
 
@@ -1083,6 +1106,7 @@ writeFileAtomic targetPath content = do
 -- the same as the existing content then leave the file as is so that we do not
 -- update the file's modification time.
 --
+-- NB: the file is assumed to be ASCII-encoded.
 rewriteFile :: FilePath -> String -> IO ()
 rewriteFile path newContent =
   flip catchIO mightNotExist $ do
@@ -1107,12 +1131,12 @@ currentDir = "."
 
 -- |Package description file (/pkgname/@.cabal@)
 defaultPackageDesc :: Verbosity -> IO FilePath
-defaultPackageDesc _verbosity = findPackageDesc currentDir
+defaultPackageDesc _verbosity = tryFindPackageDesc currentDir
 
 -- |Find a package description file in the given directory.  Looks for
 -- @.cabal@ files.
-findPackageDesc :: FilePath    -- ^Where to look
-                -> IO FilePath -- ^<pkgname>.cabal
+findPackageDesc :: FilePath                    -- ^Where to look
+                -> IO (Either String FilePath) -- ^<pkgname>.cabal
 findPackageDesc dir
  = do files <- getDirectoryContents dir
       -- to make sure we do not mistake a ~/.cabal/ dir for a <pkgname>.cabal
@@ -1123,19 +1147,23 @@ findPackageDesc dir
                        , let (name, ext) = splitExtension file
                        , not (null name) && ext == ".cabal" ]
       case cabalFiles of
-        []          -> noDesc
-        [cabalFile] -> return cabalFile
-        multiple    -> multiDesc multiple
+        []          -> return (Left  noDesc)
+        [cabalFile] -> return (Right cabalFile)
+        multiple    -> return (Left  $ multiDesc multiple)
 
   where
-    noDesc :: IO a
-    noDesc = die $ "No cabal file found.\n"
-                ++ "Please create a package description file <pkgname>.cabal"
+    noDesc :: String
+    noDesc = "No cabal file found.\n"
+             ++ "Please create a package description file <pkgname>.cabal"
 
-    multiDesc :: [String] -> IO a
-    multiDesc l = die $ "Multiple cabal files found.\n"
-                    ++ "Please use only one of: "
-                    ++ intercalate ", " l
+    multiDesc :: [String] -> String
+    multiDesc l = "Multiple cabal files found.\n"
+                  ++ "Please use only one of: "
+                  ++ intercalate ", " l
+
+-- |Like 'findPackageDesc', but calls 'die' in case of error.
+tryFindPackageDesc :: FilePath -> IO FilePath
+tryFindPackageDesc dir = join . fmap (either die return) $ findPackageDesc dir
 
 -- |Optional auxiliary package information file (/pkgname/@.buildinfo@)
 defaultHookedPackageDesc :: IO (Maybe FilePath)

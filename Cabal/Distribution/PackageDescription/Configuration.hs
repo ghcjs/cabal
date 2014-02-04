@@ -490,8 +490,9 @@ instance Monoid PDTagged where
 --
 finalizePackageDescription ::
      FlagAssignment  -- ^ Explicitly specified flag assignments
-  -> (Dependency -> Bool) -- ^ Is a given depenency satisfiable from the set of available packages?
-                          -- If this is unknown then use True.
+  -> (Dependency -> Bool) -- ^ Is a given depenency satisfiable from the set of
+                          -- available packages?  If this is unknown then use
+                          -- True.
   -> Platform      -- ^ The 'Arch' and 'OS'
   -> CompilerId    -- ^ Compiler + Version
   -> [Dependency]  -- ^ Additional constraints
@@ -500,7 +501,8 @@ finalizePackageDescription ::
             (PackageDescription, FlagAssignment)
              -- ^ Either missing dependencies or the resolved package
              -- description along with the flag assignments chosen.
-finalizePackageDescription userflags satisfyDep (Platform arch os) impl constraints
+finalizePackageDescription userflags satisfyDep
+        (Platform arch os) impl constraints
         (GenericPackageDescription pkg flags mlib0 exes0 tests0 bms0) =
     case resolveFlags of
       Right ((mlib, exes', tests', bms'), targetSet, flagVals) ->
@@ -542,9 +544,10 @@ finalizePackageDescription userflags satisfyDep (Platform arch os) impl constrai
                       | manual -> [b]
                       | otherwise -> [b, not b]
     --flagDefaults = map (\(n,x:_) -> (n,x)) flagChoices
-    check ds     = if all satisfyDep ds
-                   then DepOk
-                   else MissingDeps $ filter (not . satisfyDep) ds
+    check ds     = let missingDeps = filter (not . satisfyDep) ds
+                   in if null missingDeps
+                      then DepOk
+                      else MissingDeps missingDeps
 
 {-
 let tst_p = (CondNode [1::Int] [Distribution.Package.Dependency "a" AnyVersion] [])

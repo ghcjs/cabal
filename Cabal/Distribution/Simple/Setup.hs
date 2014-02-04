@@ -56,11 +56,13 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE. -}
 
+{-# LANGUAGE CPP #-}
+
 module Distribution.Simple.Setup (
 
   GlobalFlags(..),   emptyGlobalFlags,   defaultGlobalFlags,   globalCommand,
   ConfigFlags(..),   emptyConfigFlags,   defaultConfigFlags,   configureCommand,
-  configAbsolutePaths,
+  configAbsolutePaths, readPackageDbList, showPackageDbList,
   CopyFlags(..),     emptyCopyFlags,     defaultCopyFlags,     copyCommand,
   InstallFlags(..),  emptyInstallFlags,  defaultInstallFlags,  installCommand,
   HaddockFlags(..),  emptyHaddockFlags,  defaultHaddockFlags,  haddockCommand,
@@ -89,7 +91,7 @@ module Distribution.Simple.Setup (
   fromFlagOrDefault,
   flagToMaybe,
   flagToList,
-  boolOpt, boolOpt', trueArg, falseArg, optionVerbosity ) where
+  boolOpt, boolOpt', trueArg, falseArg, optionVerbosity, optionNumJobs ) where
 
 import Distribution.Compiler ()
 import Distribution.ReadE
@@ -97,7 +99,9 @@ import Distribution.Text
          ( Text(..), display )
 import qualified Distribution.Compat.ReadP as Parse
 import qualified Text.PrettyPrint as Disp
-import Distribution.Package ( Dependency(..) )
+import Distribution.Package ( Dependency(..)
+                            , PackageName
+                            , InstalledPackageId )
 import Distribution.PackageDescription
          ( FlagName(..), FlagAssignment )
 import Distribution.Simple.Command hiding (boolOpt, boolOpt')
@@ -158,7 +162,7 @@ instance Functor Flag where
 instance Monoid (Flag a) where
   mempty = NoFlag
   _ `mappend` f@(Flag _) = f
-  f `mappend` NoFlag    = f
+  f `mappend` NoFlag     = f
 
 instance Bounded a => Bounded (Flag a) where
   minBound = toFlag minBound
@@ -305,12 +309,19 @@ data ConfigFlags = ConfigFlags {
     configGHCiLib   :: Flag Bool,      -- ^Enable compiling library for GHCi
     configSplitObjs :: Flag Bool,      -- ^Enable -split-objs with GHC
     configStripExes :: Flag Bool,      -- ^Enable executable stripping
+    configStripLibs :: Flag Bool,      -- ^Enable library stripping
     configConstraints :: [Dependency], -- ^Additional constraints for
-                                       -- dependencies
+                                       -- dependencies.
+    configDependencies :: [(PackageName, InstalledPackageId)],
+      -- ^The packages depended on.
     configConfigurationsFlags :: FlagAssignment,
-    configTests :: Flag Bool,     -- ^Enable test suite compilation
-    configBenchmarks :: Flag Bool,     -- ^Enable benchmark compilation
-    configLibCoverage :: Flag Bool    -- ^ Enable test suite program coverage
+    configTests               :: Flag Bool, -- ^Enable test suite compilation
+    configBenchmarks          :: Flag Bool, -- ^Enable benchmark compilation
+    configLibCoverage         :: Flag Bool,
+      -- ^Enable test suite program coverage.
+    configExactConfiguration  :: Flag Bool
+      -- ^All direct dependencies and flags are provided on the command line by
+      -- the user via the '--dependency' and '--flags' options.
   }
   deriving (Read,Show)
 
@@ -335,12 +346,19 @@ defaultConfigFlags progConf = emptyConfigFlags {
     configDistPref     = Flag defaultDistPref,
     configVerbosity    = Flag normal,
     configUserInstall  = Flag False,           --TODO: reverse this
+#if defined(mingw32_HOST_OS)
+    -- See #1589.
+    configGHCiLib      = Flag True,
+#else
     configGHCiLib      = Flag False,
+#endif
     configSplitObjs    = Flag False, -- takes longer, so turn off by default
     configStripExes    = Flag True,
+    configStripLibs    = Flag True,
     configTests        = Flag False,
     configBenchmarks   = Flag False,
-    configLibCoverage  = Flag False
+    configLibCoverage  = Flag False,
+    configExactConfiguration = Flag False
   }
 
 configureCommand :: ProgramConfiguration -> CommandUI ConfigFlags
@@ -466,6 +484,11 @@ configureOptions showOrParseArgs =
          configStripExes (\v flags -> flags { configStripExes = v })
          (boolOpt [] [])
 
+      ,option "" ["library-stripping"]
+         "strip libraries upon installation to reduce binary sizes"
+         configStripLibs (\v flags -> flags { configStripLibs = v })
+         (boolOpt [] [])
+
       ,option "" ["configure-option"]
          "Extra option for configure"
          configConfigureArgs (\v flags -> flags { configConfigureArgs = v })
@@ -507,14 +530,30 @@ configureOptions showOrParseArgs =
          (reqArg "DEPENDENCY"
                  (readP_to_E (const "dependency expected") ((\x -> [x]) `fmap` parse))
                  (map (\x -> display x)))
+
+      ,option "" ["dependency"]
+         "A list of exact dependencies. E.g., --dependency=\"void=void-0.5.8-177d5cdf20962d0581fe2e4932a6c309\""
+         configDependencies (\v flags -> flags { configDependencies = v})
+         (reqArg "NAME=ID"
+                 (readP_to_E (const "dependency expected") ((\x -> [x]) `fmap` parseDependency))
+                 (map (\x -> display (fst x) ++ "=" ++ display (snd x))))
+
       ,option "" ["tests"]
          "dependency checking and compilation for test suites listed in the package description file."
          configTests (\v flags -> flags { configTests = v })
          (boolOpt [] [])
+
       ,option "" ["library-coverage"]
          "build library and test suites with Haskell Program Coverage enabled. (GHC only)"
          configLibCoverage (\v flags -> flags { configLibCoverage = v })
          (boolOpt [] [])
+
+      ,option "" ["exact-configuration"]
+         "All direct dependencies and flags are provided on the command line."
+         configExactConfiguration
+         (\v flags -> flags { configExactConfiguration = v })
+         trueArg
+
       ,option "" ["benchmarks"]
          "dependency checking and compilation for benchmarks listed in the package description file."
          configBenchmarks (\v flags -> flags { configBenchmarks = v })
@@ -530,26 +569,34 @@ configureOptions showOrParseArgs =
     showFlagList fs = [ if not set then '-':fname else fname
                       | (FlagName fname, set) <- fs]
 
-    readPackageDbList :: String -> [Maybe PackageDB]
-    readPackageDbList "clear"  = [Nothing]
-    readPackageDbList "global" = [Just GlobalPackageDB]
-    readPackageDbList "user"   = [Just UserPackageDB]
-    readPackageDbList other    = [Just (SpecificPackageDB other)]
-
-    showPackageDbList :: [Maybe PackageDB] -> [String]
-    showPackageDbList = map showPackageDb
-      where
-        showPackageDb Nothing                       = "clear"
-        showPackageDb (Just GlobalPackageDB)        = "global"
-        showPackageDb (Just UserPackageDB)          = "user"
-        showPackageDb (Just (SpecificPackageDB db)) = db
-
     liftInstallDirs =
       liftOption configInstallDirs (\v flags -> flags { configInstallDirs = v })
 
     reqPathTemplateArgFlag title _sf _lf d get set =
       reqArgFlag title _sf _lf d
         (fmap fromPathTemplate . get) (set . fmap toPathTemplate)
+
+readPackageDbList :: String -> [Maybe PackageDB]
+readPackageDbList "clear"  = [Nothing]
+readPackageDbList "global" = [Just GlobalPackageDB]
+readPackageDbList "user"   = [Just UserPackageDB]
+readPackageDbList other    = [Just (SpecificPackageDB other)]
+
+showPackageDbList :: [Maybe PackageDB] -> [String]
+showPackageDbList = map showPackageDb
+  where
+    showPackageDb Nothing                       = "clear"
+    showPackageDb (Just GlobalPackageDB)        = "global"
+    showPackageDb (Just UserPackageDB)          = "user"
+    showPackageDb (Just (SpecificPackageDB db)) = db
+
+
+parseDependency :: Parse.ReadP r (PackageName, InstalledPackageId)
+parseDependency = do
+  x <- parse
+  _ <- Parse.char '='
+  y <- parse
+  return (x, y)
 
 installDirsOptions :: [OptionField (InstallDirs (Flag PathTemplate))]
 installDirsOptions =
@@ -643,13 +690,16 @@ instance Monoid ConfigFlags where
     configGHCiLib       = mempty,
     configSplitObjs     = mempty,
     configStripExes     = mempty,
+    configStripLibs     = mempty,
     configExtraLibDirs  = mempty,
     configConstraints   = mempty,
+    configDependencies  = mempty,
     configExtraIncludeDirs    = mempty,
     configConfigurationsFlags = mempty,
-    configTests   = mempty,
-    configLibCoverage = mempty,
-    configBenchmarks    = mempty
+    configTests               = mempty,
+    configLibCoverage         = mempty,
+    configExactConfiguration  = mempty,
+    configBenchmarks          = mempty
   }
   mappend a b =  ConfigFlags {
     configPrograms      = configPrograms b,
@@ -677,13 +727,16 @@ instance Monoid ConfigFlags where
     configGHCiLib       = combine configGHCiLib,
     configSplitObjs     = combine configSplitObjs,
     configStripExes     = combine configStripExes,
+    configStripLibs     = combine configStripLibs,
     configExtraLibDirs  = combine configExtraLibDirs,
     configConstraints   = combine configConstraints,
+    configDependencies  = combine configDependencies,
     configExtraIncludeDirs    = combine configExtraIncludeDirs,
     configConfigurationsFlags = combine configConfigurationsFlags,
-    configTests = combine configTests,
-    configLibCoverage = combine configLibCoverage,
-    configBenchmarks    = combine configBenchmarks
+    configTests               = combine configTests,
+    configLibCoverage         = combine configLibCoverage,
+    configExactConfiguration  = combine configExactConfiguration,
+    configBenchmarks          = combine configBenchmarks
   }
     where combine field = field a `mappend` field b
 
@@ -1335,6 +1388,7 @@ data BuildFlags = BuildFlags {
     buildProgramArgs :: [(String, [String])],
     buildDistPref    :: Flag FilePath,
     buildVerbosity   :: Flag Verbosity,
+    buildNumJobs     :: Flag (Maybe Int),
     -- TODO: this one should not be here, it's just that the silly
     -- UserHooks stop us from passing extra info in other ways
     buildArgs :: [String]
@@ -1351,6 +1405,7 @@ defaultBuildFlags  = BuildFlags {
     buildProgramArgs = [],
     buildDistPref    = Flag defaultDistPref,
     buildVerbosity   = Flag normal,
+    buildNumJobs     = mempty,
     buildArgs        = []
   }
 
@@ -1379,19 +1434,24 @@ buildCommand progConf = makeCommand name shortDesc longDesc
 buildOptions :: ProgramConfiguration -> ShowOrParseArgs
                 -> [OptionField BuildFlags]
 buildOptions progConf showOrParseArgs =
-  optionVerbosity buildVerbosity (\v flags -> flags { buildVerbosity = v })
-  : optionDistPref
-  buildDistPref (\d flags -> flags { buildDistPref = d })
-  showOrParseArgs
+  [ optionVerbosity
+      buildVerbosity (\v flags -> flags { buildVerbosity = v })
 
-  : programConfigurationPaths   progConf showOrParseArgs
-  buildProgramPaths (\v flags -> flags { buildProgramPaths = v})
+  , optionDistPref
+      buildDistPref (\d flags -> flags { buildDistPref = d }) showOrParseArgs
+
+  , optionNumJobs
+      buildNumJobs (\v flags -> flags { buildNumJobs = v })
+  ]
+
+  ++ programConfigurationPaths progConf showOrParseArgs
+       buildProgramPaths (\v flags -> flags { buildProgramPaths = v})
 
   ++ programConfigurationOption progConf showOrParseArgs
-  buildProgramArgs (\v fs -> fs { buildProgramArgs = v })
+       buildProgramArgs (\v fs -> fs { buildProgramArgs = v })
 
   ++ programConfigurationOptions progConf showOrParseArgs
-  buildProgramArgs (\v flags -> flags { buildProgramArgs = v})
+       buildProgramArgs (\v flags -> flags { buildProgramArgs = v})
 
 emptyBuildFlags :: BuildFlags
 emptyBuildFlags = mempty
@@ -1402,6 +1462,7 @@ instance Monoid BuildFlags where
     buildProgramArgs = mempty,
     buildVerbosity   = mempty,
     buildDistPref    = mempty,
+    buildNumJobs     = mempty,
     buildArgs        = mempty
   }
   mappend a b = BuildFlags {
@@ -1409,6 +1470,7 @@ instance Monoid BuildFlags where
     buildProgramArgs = combine buildProgramArgs,
     buildVerbosity   = combine buildVerbosity,
     buildDistPref    = combine buildDistPref,
+    buildNumJobs     = combine buildNumJobs,
     buildArgs        = combine buildArgs
   }
     where combine field = field a `mappend` field b
@@ -1832,6 +1894,28 @@ optionVerbosity get set =
     (optArg "n" (fmap Flag flagToVerbosity)
                 (Flag verbose) -- default Value if no n is given
                 (fmap (Just . showForCabal) . flagToList))
+
+optionNumJobs :: (flags -> Flag (Maybe Int))
+              -> (Flag (Maybe Int) -> flags -> flags)
+              -> OptionField flags
+optionNumJobs get set =
+  option "j" ["jobs"]
+    "Run NUM jobs simultaneously (or '$ncpus' if no NUM is given)."
+    get set
+    (optArg "NUM" (fmap Flag numJobsParser)
+                  (Flag Nothing)
+                  (map (Just . maybe "$ncpus" show) . flagToList))
+  where
+    numJobsParser :: ReadE (Maybe Int)
+    numJobsParser = ReadE $ \s ->
+      case s of
+        "$ncpus" -> Right Nothing
+        _        -> case reads s of
+          [(n, "")]
+            | n < 1     -> Left "The number of jobs should be 1 or more."
+            | n > 64    -> Left "You probably don't want that many jobs."
+            | otherwise -> Right (Just n)
+          _             -> Left "The jobs value should be a number or '$ncpus'"
 
 -- ------------------------------------------------------------
 -- * Other Utils

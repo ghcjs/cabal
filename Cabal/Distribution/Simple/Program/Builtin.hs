@@ -31,7 +31,6 @@ module Distribution.Simple.Program.Builtin (
     haskellSuitePkgProgram,
     uhcProgram,
     gccProgram,
-    ranlibProgram,
     arProgram,
     stripProgram,
     happyProgram,
@@ -92,7 +91,6 @@ builtinPrograms =
     , greencardProgram
     -- platform toolchain
     , gccProgram
-    , ranlibProgram
     , arProgram
     , stripProgram
     , ldProgram
@@ -255,9 +253,6 @@ gccProgram :: Program
 gccProgram = (simpleProgram "gcc") {
     programFindVersion = findProgramVersion "-dumpversion" id
   }
-
-ranlibProgram :: Program
-ranlibProgram = simpleProgram "ranlib"
 
 arProgram :: Program
 arProgram = simpleProgram "ar"

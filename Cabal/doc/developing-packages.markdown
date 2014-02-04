@@ -26,10 +26,12 @@ To turn this into a Cabal package we need two extra files in the
 project's root directory:
 
  * `proglet.cabal`: containing package metadata and build information.
- * `Setup.hs`: containing any customisation of the build system.
 
-We can create both manually or we can use `cabal init` to create them
-for us.
+ * `Setup.hs`: usually containing a few standardized lines of code, but
+   can be customized if necessary.
+
+We can create both files manually or we can use `cabal init` to create
+them for us.
 
 ### Using "cabal init" ###
 
@@ -489,9 +491,10 @@ _package_`.cabal`
     the interface described in the section on [building and installing
     packages](#building-and-installing-a-package)). This module should
     import only modules that will be present in all Haskell
-    implementations, including modules of the Cabal library.  In most
-    cases it will be trivial, calling on the Cabal library to do most of
-    the work.
+    implementations, including modules of the Cabal library. The
+    content of this file is determined by the `build-type` setting in
+    the `.cabal` file. In most cases it will be trivial, calling on
+    the Cabal library to do most of the work.
 
 Once you have these, you can create a source bundle of this directory
 for distribution. Building of the package is discussed in the section on
@@ -763,19 +766,55 @@ describe the package as a whole:
 
 `build-type:` _identifier_
 :   The type of build used by this package. Build types are the
-    constructors of the [BuildType][] type, defaulting to `Custom`. If
-    this field is given a value other than `Custom`, some tools such as
-    `cabal-install` will be able to build the package without using the
-    setup script. So if you are just using the default `Setup.hs` then
-    set the build type as `Simple`.
+    constructors of the [BuildType][] type, defaulting to `Custom`.
+
+    If the build type is anything other than `Custom`, then the
+    `Setup.hs` file *must* be exactly the standardized content
+    discussed below. This is because in these cases, `cabal` will
+    ignore the `Setup.hs` file completely, whereas other methods of
+    package management, such as `runhaskell Setup.hs [CMD]`, still
+    rely on the `Setup.hs` file.
+
+    For build type `Simple`, the contents of `Setup.hs` must be:
+
+    ~~~~~~~~~~~~~~~~
+    import Distribution.Simple
+    main = defaultMain
+    ~~~~~~~~~~~~~~~~
+
+    For build type `Configure` (see the section on [system-dependent
+    parameters](#system-dependent-parameters) below), the contents of
+    `Setup.hs` must be:
+
+    ~~~~~~~~~~~~~~~~
+    import Distribution.Simple
+    main = defaultMainWithHooks autoconfUserHooks
+    ~~~~~~~~~~~~~~~~
+
+    For build type `Make` (see the section on [more complex
+    packages](#more-complex-packages) below), the contents of
+    `Setup.hs` must be:
+
+    ~~~~~~~~~~~~~~~~
+    import Distribution.Make
+    main = defaultMain
+    ~~~~~~~~~~~~~~~~
+
+    For build type `Custom`, the file `Setup.hs` can be customized,
+    and will be used both by `cabal` and other tools.
+
+    For most packages, the build type `Simple` is sufficient.
 
 `license:` _identifier_ (default: `AllRightsReserved`)
 :   The type of license under which this package is distributed.
     License names are the constants of the [License][dist-license] type.
 
-`license-file:` _filename_
-:   The name of a file containing the precise license for this package.
-    It will be installed with the package.
+`license-file:` _filename_ or `license-files:` _filename list_
+:   The name of a file(s) containing the precise copyright license for
+    this package. The license file(s) will be installed with the package.
+
+    If you have multiple license files then use the `license-files`
+    field instead of (or in addition to) the `license-file` field.
 
 `copyright:` _freeform_
 :   The content of a copyright notice, typically the name of the holder
@@ -874,7 +913,7 @@ describe the package as a whole:
     built with [`setup sdist`](#setup-sdist). As with `data-files` it
     can use a limited form of `*` wildcards in file names.
 
-`extra-html-files:` _filename list_
+`extra-doc-files:` _filename list_
 :   A list of additional files to be included in source distributions,
     and also copied to the html directory when Haddock documentation is
     generated. As with `data-files` it can use a limited form of `*`
@@ -931,6 +970,21 @@ cabal repl exe:foo
 cabal repl test:bar
 cabal repl bench:baz
 ~~~~~~~~~~~~~~~~
+
+#### Freezing dependency versions ####
+
+If a package is built in several different environments, such as a development
+environment, a staging environment and a production environment, it may be
+necessary or desirable to ensure that the same dependency versions are
+selected in each environment. This can be done with the `freeze` command:
+
+~~~~~~~~~~~~~~~~
+cabal freeze
+~~~~~~~~~~~~~~~~
+
+The command writes the selected version for all dependencies to the
+`cabal.config` file.  All environments which share this file will use the
+dependency versions specified in it.
 
 ### Executables ###
 
@@ -1806,19 +1860,18 @@ field.
 
 For some packages, especially those interfacing with C libraries,
 implementation details and the build procedure depend on the build
-environment.  A variant of the simple build infrastructure (the
-`build-type` `Configure`) handles many such situations using a slightly
-longer `Setup.hs`:
+environment. The `build-type` `Configure` can be used to handle many
+such situations. In this case, `Setup.hs` should be:
 
 ~~~~~~~~~~~~~~~~
 import Distribution.Simple
 main = defaultMainWithHooks autoconfUserHooks
 ~~~~~~~~~~~~~~~~
 
-Most packages, however, would probably do better with
-[configurations](#configurations).
+Most packages, however, would probably do better using the `Simple`
+build type and [configurations](#configurations).
 
-This program differs from `defaultMain` in two ways:
+The `build-type` `Configure` differs from `Simple` in two ways:
 
 * The package root directory must contain a shell script called
   `configure`. The configure step will run the script. This `configure`
@@ -1906,27 +1959,39 @@ cc-options:  -I/usr/X11R6/include
 ld-options:  -L/usr/X11R6/lib
 ~~~~~~~~~~~~~~~~
 
-The `configure` script also generates a header file
-`include/HsX11Config.h` containing C preprocessor defines recording the
-results of various tests.  This file may be included by C source files
-and preprocessed Haskell source files in the package.
+The `configure` script also generates a header file `include/HsX11Config.h`
+containing C preprocessor defines recording the results of various tests.  This
+file may be included by C source files and preprocessed Haskell source files in
+the package.
 
-Note: Packages using these features will also need to list
-additional files such as `configure`,
-templates for `.buildinfo` files, files named
-only in `.buildinfo` files, header files and
-so on in the `extra-source-files` field,
-and extra documentation resources in the `extra-html-files` field,
-to ensure that they are included in source distributions.
-They should also list files and directories generated by
-`configure` in the
-`extra-tmp-files` field to ensure that they
-are removed by `setup clean`.
+Note: Packages using these features will also need to list additional files such
+as `configure`, templates for `.buildinfo` files, files named only in
+`.buildinfo` files, header files and so on in the `extra-source-files` field to
+ensure that they are included in source distributions.  They should also list
+files and directories generated by `configure` in the `extra-tmp-files` field to
+ensure that they are removed by `setup clean`.
+
+Quite often the files generated by `configure` need to be listed somewhere in
+the package description (for example, in the `install-includes` field). However,
+we usually don't want generated files to be included in the source tarball. The
+solution is again provided by the `.buildinfo` file. In the above example, the
+following line should be added to `X11.buildinfo`:
+
+~~~~~~~~~~~~~~~~
+install-includes: HsX11Config.h
+~~~~~~~~~~~~~~~~
+
+In this way, the generated `HsX11Config.h` file won't be included in the source
+tarball in addition to `HsX11Config.h.in`, but it will be copied to the right
+location during the install process. Packages that use custom `Setup.hs` scripts
+can update the necessary fields programmatically instead of using the
+`.buildinfo` file.
+
 
 ## Conditional compilation ##
 
 Sometimes you want to write code that works with more than one version
-of a dependency.  You can specify a range of versions for the depenency
+of a dependency.  You can specify a range of versions for the dependency
 in the `build-depends`, but how do you then write the code that can use
 different versions of the API?
 
@@ -1953,6 +2018,10 @@ the actual version of the package in use is greater than or equal to
 lexicographic on the sequence, but numeric on each component, so for
 example 1.2.0 is greater than 1.0.3).
 
+Since version 1.20, there is also the `MIN_TOOL_VERSION_`_`tool`_ family of
+macros for conditioning on the version of build tools used to build the program
+(e.g. `hsc2hs`).
+
 Cabal places the definitions of these macros into an
 automatically-generated header file, which is included when
 preprocessing Haskell source code by passing options to the C
@@ -1970,18 +2039,28 @@ generating prettier documentation in some special cases.
 For packages that don't fit the simple schemes described above, you have
 a few options:
 
-  * You can customize the simple build infrastructure using _hooks_.
-    These allow you to perform additional actions before and after each
-    command is run, and also to specify additional preprocessors.  See
-    `UserHooks` in [Distribution.Simple][dist-simple] for the details,
-    but note that this interface is experimental, and likely to change
-    in future releases.
+  * By using the `build-type` `Custom`, you can supply your own
+    `Setup.hs` file, and customize the simple build infrastructure
+    using _hooks_.  These allow you to perform additional actions
+    before and after each command is run, and also to specify
+    additional preprocessors. A typical `Setup.hs` may look like this:
+
+    ~~~~~~~~~~~~~~~~
+    import Distribution.Simple
+    main = defaultMainWithHooks simpleUserHooks { postHaddock = posthaddock }
+
+    posthaddock args flags desc info = ....
+    ~~~~~~~~~~~~~~~~
+
+    See `UserHooks` in [Distribution.Simple][dist-simple] for the
+    details, but note that this interface is experimental, and likely
+    to change in future releases.
 
   * You could delegate all the work to `make`, though this is unlikely
     to be very portable. Cabal supports this with the `build-type`
     `Make` and a trivial setup library [Distribution.Make][dist-make],
     which simply parses the command line arguments and invokes `make`.
-    Here `Setup.hs` looks like
+    Here `Setup.hs` should look like this:
 
     ~~~~~~~~~~~~~~~~
     import Distribution.Make
@@ -2015,11 +2094,12 @@ a few options:
                                 sysconfdir=$(destdir)/$(sysconfdir) \
         ~~~~~~~~~~~~~~~~
 
-  * You can write your own setup script conforming to the interface
+  * Finally, with the `build-type` `Custom`, you can also write your
+    own setup script from scratch. It must conform to the interface
     described in the section on [building and installing
-    packages](#building-and-installing-a-package), possibly using the
-    Cabal library for part of the work.  One option is to copy the
-    source of `Distribution.Simple`, and alter it for your needs.
+    packages](#building-and-installing-a-package), and you may use the
+    Cabal library for all or part of the work.  One option is to copy
+    the source of `Distribution.Simple`, and alter it for your needs.
     Good luck.
 
 

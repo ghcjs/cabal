@@ -34,6 +34,8 @@ import Distribution.Simple.Program
          , c2hsProgram
          )
 import Distribution.Simple.Program.GHC ( GhcOptions )
+import qualified Distribution.Simple.Setup as Cabal
+        ( Flag )
 import Distribution.Text ( display )
 import Language.Haskell.Extension ( Language(..), Extension(..) )
 import Distribution.Verbosity
@@ -197,22 +199,24 @@ ghcLibDir verbosity lbi =
   GHC.ghcLibDir verbosity (makeGhcLbi False lbi)
 
 buildLib :: Verbosity
+         -> Cabal.Flag (Maybe Int)
          -> PackageDescription
          -> LocalBuildInfo
          -> Library
          -> ComponentLocalBuildInfo
          -> IO ()
-buildLib verbosity pkg_descr lbi lib clbi =
-  GHC.buildLib verbosity pkg_descr (makeGhcLbi False lbi) lib clbi
+buildLib verbosity numJobsFlag pkg_descr lbi lib clbi =
+  GHC.buildLib verbosity numJobsFlag pkg_descr (makeGhcLbi False lbi) lib clbi
 
 buildExe :: Verbosity
-            -> PackageDescription
-            -> LocalBuildInfo
-            -> Executable
-            -> ComponentLocalBuildInfo
-            -> IO ()
-buildExe verbosity pkg_descr lbi exe clbi =
-  GHC.buildExe verbosity pkg_descr (makeGhcLbi False lbi) exe clbi
+         -> Cabal.Flag (Maybe Int)
+         -> PackageDescription
+         -> LocalBuildInfo
+         -> Executable
+         -> ComponentLocalBuildInfo
+         -> IO ()
+buildExe verbosity numJobsFlag pkg_descr lbi exe clbi =
+  GHC.buildExe verbosity numJobsFlag pkg_descr (makeGhcLbi False lbi) exe clbi
 
 installLib :: Verbosity
            -> LocalBuildInfo

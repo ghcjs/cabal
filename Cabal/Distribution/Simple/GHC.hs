@@ -65,6 +65,7 @@ module Distribution.Simple.GHC (
         configure, getInstalledPackages, getPackageDBContents,
         buildLib, buildExe,
         replLib, replExe,
+        startInterpreter,
         installLib, installExe,
         libAbiHash,
         initPackageDB,
@@ -106,13 +107,17 @@ import Distribution.Simple.Program
          , requireProgramVersion, requireProgram
          , userMaybeSpecifyPath, programPath, lookupProgram, addKnownProgram
          , ghcProgram, ghcPkgProgram, hsc2hsProgram
-         , arProgram, ranlibProgram, ldProgram
-         , stripProgram )
+         , arProgram, ldProgram
+         , gccProgram, stripProgram )
 import qualified Distribution.Simple.Program.HcPkg as HcPkg
 import qualified Distribution.Simple.Program.Ar    as Ar
 import qualified Distribution.Simple.Program.Ld    as Ld
+import qualified Distribution.Simple.Program.Strip as Strip
 import Distribution.Simple.Program.GHC
-import Distribution.Simple.Setup (toFlag, fromFlag)
+import Distribution.Simple.Setup
+         ( toFlag, fromFlag, fromFlagOrDefault )
+import qualified Distribution.Simple.Setup as Cabal
+        ( Flag )
 import Distribution.Simple.Compiler
          ( CompilerFlavor(..), CompilerId(..), Compiler(..), compilerVersion
          , OptimisationLevel(..), PackageDB(..), PackageDBStack )
@@ -132,7 +137,7 @@ import qualified Data.Map as M  ( Map, fromList, lookup )
 import Data.Maybe               ( catMaybes, fromMaybe, maybeToList )
 import Data.Monoid              ( Monoid(..) )
 import System.Directory
-         ( removeFile, getDirectoryContents, doesFileExist )
+         ( getDirectoryContents, doesFileExist, getTemporaryDirectory )
 import System.FilePath          ( (</>), (<.>), takeExtension,
                                   takeDirectory, replaceExtension,
                                   splitExtension )
@@ -419,22 +424,23 @@ substTopDir topDir ipo
 
 -- | Build a library with GHC.
 --
-buildLib, replLib :: Verbosity
+buildLib, replLib :: Verbosity          -> Cabal.Flag (Maybe Int)
                   -> PackageDescription -> LocalBuildInfo
                   -> Library            -> ComponentLocalBuildInfo -> IO ()
 buildLib = buildOrReplLib False
 replLib  = buildOrReplLib True
 
-buildOrReplLib :: Bool -> Verbosity
+buildOrReplLib :: Bool -> Verbosity  -> Cabal.Flag (Maybe Int)
                -> PackageDescription -> LocalBuildInfo
                -> Library            -> ComponentLocalBuildInfo -> IO ()
-buildOrReplLib forRepl verbosity pkg_descr lbi lib clbi = do
+buildOrReplLib forRepl verbosity numJobsFlag pkg_descr lbi lib clbi = do
   libName <- case componentLibraries clbi of
              [libName] -> return libName
              [] -> die "No library name found when building library"
              _  -> die "Multiple library names found when building library"
 
   let libTargetDir = buildDir lbi
+      numJobs = fromMaybe 1 $ fromFlagOrDefault Nothing numJobsFlag
       pkgid = packageId pkg_descr
       whenVanillaLib forceVanilla =
         when (not forRepl && (forceVanilla || withVanillaLib lbi))
@@ -447,7 +453,7 @@ buildOrReplLib forRepl verbosity pkg_descr lbi lib clbi = do
       ghcVersion = compilerVersion comp
 
   (ghcProg, _) <- requireProgram verbosity ghcProgram (withPrograms lbi)
-  let runGhcProg = runGHC verbosity ghcProg
+  let runGhcProg = runGHC verbosity ghcProg comp
 
   libBi <- hackThreadedFlag verbosity
              comp (withProfLib lbi) (libBuildInfo lib)
@@ -466,6 +472,7 @@ buildOrReplLib forRepl verbosity pkg_descr lbi lib clbi = do
       baseOpts    = componentGhcOptions verbosity lbi libBi clbi libTargetDir
       vanillaOpts = baseOpts `mappend` mempty {
                       ghcOptMode         = toFlag GhcModeMake,
+                      ghcOptNumJobs      = toFlag numJobs,
                       ghcOptPackageName  = toFlag pkgid,
                       ghcOptInputModules = libModules lib
                     }
@@ -493,7 +500,8 @@ buildOrReplLib forRepl verbosity pkg_descr lbi lib clbi = do
                    }
       replOpts    = vanillaOpts {
                       ghcOptExtra        = filterGhciFlags
-                                           (ghcOptExtra vanillaOpts)
+                                           (ghcOptExtra vanillaOpts),
+                      ghcOptNumJobs      = mempty
                     }
                     `mappend` linkerOpts
                     `mappend` mempty {
@@ -593,11 +601,6 @@ buildOrReplLib forRepl verbosity pkg_descr lbi lib clbi = do
             else return []
 
   unless (null hObjs && null cObjs && null stubObjs) $ do
-    -- first remove library files if they exists
-    unless forRepl $ sequence_
-      [ removeFile libFilePath `catchIO` \_ -> return ()
-      | libFilePath <- [vanillaLibFilePath, profileLibFilePath
-                       ,sharedLibFilePath,  ghciLibFilePath] ]
 
     let staticObjectFiles =
                hObjs
@@ -638,14 +641,10 @@ buildOrReplLib forRepl verbosity pkg_descr lbi lib clbi = do
             }
 
     whenVanillaLib False $ do
-      (arProg, _) <- requireProgram verbosity arProgram (withPrograms lbi)
-      Ar.createArLibArchive verbosity arProg
-        vanillaLibFilePath staticObjectFiles
+      Ar.createArLibArchive verbosity lbi vanillaLibFilePath staticObjectFiles
 
     whenProfLib $ do
-      (arProg, _) <- requireProgram verbosity arProgram (withPrograms lbi)
-      Ar.createArLibArchive verbosity arProg
-        profileLibFilePath profObjectFiles
+      Ar.createArLibArchive verbosity lbi profileLibFilePath profObjectFiles
 
     whenGHCiLib $ do
       (ldProg, _) <- requireProgram verbosity ldProgram (withPrograms lbi)
@@ -655,24 +654,37 @@ buildOrReplLib forRepl verbosity pkg_descr lbi lib clbi = do
     whenSharedLib False $
       runGhcProg ghcSharedLinkArgs
 
+-- | Start a REPL without loading any source files.
+startInterpreter :: Verbosity -> ProgramConfiguration -> Compiler
+                 -> PackageDBStack -> IO ()
+startInterpreter verbosity conf comp packageDBs = do
+  let replOpts = mempty {
+        ghcOptMode       = toFlag GhcModeInteractive,
+        ghcOptPackageDBs = packageDBs
+        }
+  checkPackageDbStack packageDBs
+  (ghcProg, _) <- requireProgram verbosity ghcProgram conf
+  runGHC verbosity ghcProg comp replOpts
 
 -- | Build an executable with GHC.
 --
-buildExe, replExe :: Verbosity
+buildExe, replExe :: Verbosity          -> Cabal.Flag (Maybe Int)
                   -> PackageDescription -> LocalBuildInfo
                   -> Executable         -> ComponentLocalBuildInfo -> IO ()
 buildExe = buildOrReplExe False
 replExe  = buildOrReplExe True
 
-buildOrReplExe :: Bool -> Verbosity
+buildOrReplExe :: Bool -> Verbosity  -> Cabal.Flag (Maybe Int)
                -> PackageDescription -> LocalBuildInfo
                -> Executable         -> ComponentLocalBuildInfo -> IO ()
-buildOrReplExe forRepl verbosity _pkg_descr lbi
+buildOrReplExe forRepl verbosity numJobsFlag _pkg_descr lbi
   exe@Executable { exeName = exeName', modulePath = modPath } clbi = do
 
   (ghcProg, _) <- requireProgram verbosity ghcProgram (withPrograms lbi)
-  let runGhcProg = runGHC verbosity ghcProg
-      comp       = compiler lbi
+  let comp       = compiler lbi
+      numJobs    = fromMaybe 1 $
+                   fromFlagOrDefault Nothing numJobsFlag
+      runGhcProg = runGHC verbosity ghcProg comp
 
   exeBi <- hackThreadedFlag verbosity
              comp (withProfExe lbi) (buildInfo exe)
@@ -780,10 +792,12 @@ buildOrReplExe forRepl verbosity _pkg_descr lbi
 
   -- Build static/dynamic object files for TH, if needed.
   when compileForTH $
-    runGhcProg compileTHOpts { ghcOptNoLink = toFlag True }
+    runGhcProg compileTHOpts { ghcOptNoLink  = toFlag True
+                             , ghcOptNumJobs = toFlag numJobs }
 
   unless forRepl $
-    runGhcProg compileOpts { ghcOptNoLink = toFlag True }
+    runGhcProg compileOpts { ghcOptNoLink  = toFlag True
+                           , ghcOptNumJobs = toFlag numJobs }
 
   -- build any C sources
   unless (null cSrcs) $ do
@@ -872,6 +886,7 @@ libAbiHash verbosity pkg_descr lbi lib clbi = do
   libBi <- hackThreadedFlag verbosity
              (compiler lbi) (withProfLib lbi) (libBuildInfo lib)
   let
+      comp        = compiler lbi
       vanillaArgs =
         (componentGhcOptions verbosity lbi libBi clbi (buildDir lbi))
         `mappend` mempty {
@@ -898,7 +913,7 @@ libAbiHash verbosity pkg_descr lbi lib clbi = do
            else error "libAbiHash: Can't find an enabled library way"
   --
   (ghcProg, _) <- requireProgram verbosity ghcProgram (withPrograms lbi)
-  getProgramInvocationOutput verbosity (ghcInvocation ghcProg ghcArgs)
+  getProgramInvocationOutput verbosity (ghcInvocation ghcProg comp ghcArgs)
 
 componentGhcOptions :: Verbosity -> LocalBuildInfo
                     -> BuildInfo -> ComponentLocalBuildInfo -> FilePath
@@ -986,25 +1001,10 @@ installExe verbosity lbi installDirs buildPref
           installExecutableFile verbosity
             (buildPref </> exeName exe </> exeFileName)
             (dest <.> exeExtension)
-          stripExe verbosity lbi exeFileName (dest <.> exeExtension)
+          when (stripExes lbi) $
+            Strip.stripExe verbosity (hostPlatform lbi) (withPrograms lbi)
+                           (dest <.> exeExtension)
   installBinary (binDir </> fixedExeBaseName)
-
-stripExe :: Verbosity -> LocalBuildInfo -> FilePath -> FilePath -> IO ()
-stripExe verbosity lbi name path = when (stripExes lbi) $
-  case lookupProgram stripProgram (withPrograms lbi) of
-    Just strip -> rawSystemProgram verbosity strip args
-    Nothing    -> unless (buildOS == Windows) $
-                  -- Don't bother warning on windows, we don't expect them to
-                  -- have the strip program anyway.
-                  warn verbosity $ "Unable to strip executable '" ++ name
-                                ++ "' (missing the 'strip' program)"
-  where
-    args = path : case buildOS of
-       OSX -> ["-x"] -- By default, stripping the ghc binary on at least
-                     -- some OS X installations causes:
-                     --     HSbase-3.0.o: unknown symbol `_environ'"
-                     -- The -x flag fixes that.
-       _   -> []
 
 -- |Install for ghc, .hi, .a and, if --with-ghci given, .o
 installLib    :: Verbosity
@@ -1018,31 +1018,34 @@ installLib    :: Verbosity
               -> IO ()
 installLib verbosity lbi targetDir dynlibTargetDir builtDir _pkg lib clbi = do
   -- copy .hi files over:
-  let copyHelper installFun src dst n = do
-        createDirectoryIfMissingVerbose verbosity True dst
-        installFun verbosity (src </> n) (dst </> n)
-      copy       = copyHelper installOrdinaryFile
-      copyShared = copyHelper installExecutableFile
-      copyModuleFiles ext =
-        findModuleFiles [builtDir] [ext] (libModules lib)
-          >>= installOrdinaryFiles verbosity targetDir
   whenVanilla $ copyModuleFiles "hi"
   whenProf    $ copyModuleFiles "p_hi"
   whenShared  $ copyModuleFiles "dyn_hi"
 
   -- copy the built library files over:
-  whenVanilla $ mapM_ (copy builtDir targetDir)             vanillaLibNames
-  whenProf    $ mapM_ (copy builtDir targetDir)             profileLibNames
-  whenGHCi    $ mapM_ (copy builtDir targetDir)             ghciLibNames
-  whenShared  $ mapM_ (copyShared builtDir dynlibTargetDir) sharedLibNames
-
-  -- run ranlib if necessary:
-  whenVanilla $ mapM_ (updateLibArchive verbosity lbi . (targetDir </>))
-                      vanillaLibNames
-  whenProf    $ mapM_ (updateLibArchive verbosity lbi . (targetDir </>))
-                      profileLibNames
+  whenVanilla $ mapM_ (installOrdinary builtDir targetDir)       vanillaLibNames
+  whenProf    $ mapM_ (installOrdinary builtDir targetDir)       profileLibNames
+  whenGHCi    $ mapM_ (installOrdinary builtDir targetDir)       ghciLibNames
+  whenShared  $ mapM_ (installShared   builtDir dynlibTargetDir) sharedLibNames
 
   where
+    install isShared srcDir dstDir name = do
+      let src = srcDir </> name
+          dst = dstDir </> name
+      createDirectoryIfMissingVerbose verbosity True dstDir
+      if isShared
+        then do when (stripLibs lbi) $ Strip.stripLib verbosity
+                                       (hostPlatform lbi) (withPrograms lbi) src
+                installExecutableFile verbosity src dst
+        else installOrdinaryFile   verbosity src dst
+
+    installOrdinary = install False
+    installShared   = install True
+
+    copyModuleFiles ext =
+      findModuleFiles [builtDir] [ext] (libModules lib)
+      >>= installOrdinaryFiles verbosity targetDir
+
     cid = compilerId (compiler lbi)
     libNames = componentLibraries clbi
     vanillaLibNames = map mkLibName             libNames
@@ -1056,18 +1059,6 @@ installLib verbosity lbi targetDir dynlibTargetDir builtDir _pkg lib clbi = do
     whenProf    = when (hasLib && withProfLib    lbi)
     whenGHCi    = when (hasLib && withGHCiLib    lbi)
     whenShared  = when (hasLib && withSharedLib  lbi)
-
--- | On MacOS X we have to call @ranlib@ to regenerate the archive index after
--- copying. This is because the silly MacOS X linker checks that the archive
--- index is not older than the file itself, which means simply
--- copying/installing the file breaks it!!
---
-updateLibArchive :: Verbosity -> LocalBuildInfo -> FilePath -> IO ()
-updateLibArchive verbosity lbi path
-  | buildOS == OSX = do
-    (ranlib, _) <- requireProgram verbosity ranlibProgram (withPrograms lbi)
-    rawSystemProgram verbosity ranlib [path]
-  | otherwise = return ()
 
 -- -----------------------------------------------------------------------------
 -- Registering

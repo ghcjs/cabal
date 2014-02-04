@@ -33,6 +33,7 @@ module Distribution.Client.Sandbox (
     tryGetIndexFilePath,
     sandboxBuildDir,
     getInstalledPackagesInSandbox,
+    updateSandboxConfigFileFlag,
 
     -- FIXME: move somewhere else
     configPackageDB', configCompilerAux'
@@ -77,9 +78,9 @@ import Distribution.Simple.Program            ( ProgramConfiguration )
 import Distribution.Simple.Setup              ( Flag(..), HaddockFlags(..)
                                               , fromFlagOrDefault )
 import Distribution.Simple.SrcDist            ( prepareTree )
-import Distribution.Simple.Utils              ( die, debug, notice, warn
+import Distribution.Simple.Utils              ( die, debug, notice, info, warn
                                               , debugNoWrap, defaultPackageDesc
-                                              , findPackageDesc
+                                              , tryFindPackageDesc
                                               , intercalate, topHandlerWith
                                               , createDirectoryIfMissingVerbose )
 import Distribution.Package                   ( Package(..) )
@@ -99,7 +100,7 @@ import Data.Bits                              ( shiftL, shiftR, xor )
 import Data.Char                              ( ord )
 import Data.IORef                             ( newIORef, writeIORef, readIORef )
 import Data.List                              ( delete, foldl' )
-import Data.Maybe                             ( fromJust )
+import Data.Maybe                             ( fromJust, fromMaybe )
 import Data.Monoid                            ( mempty, mappend )
 import Data.Word                              ( Word32 )
 import Numeric                                ( showHex )
@@ -154,14 +155,17 @@ sandboxBuildDir sandboxDir = "dist/dist-sandbox-" ++ showHex sandboxDirHash ""
 -- * Basic sandbox functions.
 --
 
--- | Return the path to the package environment directory - either the current
--- directory or the one that @--sandbox-config-file@ resides in.
-getPkgEnvDir :: GlobalFlags -> IO FilePath
-getPkgEnvDir globalFlags = do
-  let sandboxConfigFileFlag = globalSandboxConfigFile globalFlags
-  case sandboxConfigFileFlag of
-    NoFlag    -> getCurrentDirectory
-    Flag path -> tryCanonicalizePath . takeDirectory $ path
+-- | If @--sandbox-config-file@ wasn't given on the command-line, set it to the
+-- value of the @CABAL_SANDBOX_CONFIG@ environment variable, or else to
+-- 'NoFlag'.
+updateSandboxConfigFileFlag :: GlobalFlags -> IO GlobalFlags
+updateSandboxConfigFileFlag globalFlags =
+  case globalSandboxConfigFile globalFlags of
+    Flag _ -> return globalFlags
+    NoFlag -> do
+      f' <- fmap (fromMaybe NoFlag . fmap Flag) . lookupEnv
+            $ "CABAL_SANDBOX_CONFIG"
+      return globalFlags { globalSandboxConfigFile = f' }
 
 -- | Return the path to the sandbox config file - either the default or the one
 -- specified with @--sandbox-config-file@.
@@ -265,14 +269,14 @@ initPackageDBIfNeeded verbosity configFlags comp conf = do
   when packageDBExists $
     debug verbosity $ "The package database already exists: " ++ dbPath
 
--- | Entry point for the 'cabal dump-pkgenv' command.
+-- | Entry point for the 'cabal sandbox dump-pkgenv' command.
 dumpPackageEnvironment :: Verbosity -> SandboxFlags -> GlobalFlags -> IO ()
 dumpPackageEnvironment verbosity _sandboxFlags globalFlags = do
   (sandboxDir, pkgEnv) <- tryLoadSandboxConfig verbosity globalFlags
   commentPkgEnv        <- commentPackageEnvironment sandboxDir
   putStrLn . showPackageEnvironmentWithComments (Just commentPkgEnv) $ pkgEnv
 
--- | Entry point for the 'cabal sandbox-init' command.
+-- | Entry point for the 'cabal sandbox init' command.
 sandboxInit :: Verbosity -> SandboxFlags  -> GlobalFlags -> IO ()
 sandboxInit verbosity sandboxFlags globalFlags = do
   -- Warn if there's a 'cabal-dev' sandbox.
@@ -316,7 +320,7 @@ sandboxInit verbosity sandboxFlags globalFlags = do
   maybeAddCompilerTimestampRecord verbosity sandboxDir indexFile
     (compilerId comp) platform
 
--- | Entry point for the 'cabal sandbox-delete' command.
+-- | Entry point for the 'cabal sandbox delete' command.
 sandboxDelete :: Verbosity -> SandboxFlags -> GlobalFlags -> IO ()
 sandboxDelete verbosity _sandboxFlags globalFlags = do
   (useSandbox, _) <- loadConfigOrSandboxConfig verbosity globalFlags mempty
@@ -458,8 +462,8 @@ sandboxListSources verbosity _sandboxFlags globalFlags = do
     notice verbosity $ "\nTo unregister source dependencies, "
                        ++ "use the 'sandbox delete-source' command."
 
--- | Invoke the @hc-pkg@ tool with provided arguments, restricted to the
--- sandbox.
+-- | Entry point for the 'cabal sandbox hc-pkg' command. Invokes the @hc-pkg@
+-- tool with provided arguments, restricted to the sandbox.
 sandboxHcPkg :: Verbosity -> SandboxFlags -> GlobalFlags -> [String] -> IO ()
 sandboxHcPkg verbosity _sandboxFlags globalFlags extraArgs = do
   (_sandboxDir, pkgEnv) <- tryLoadSandboxConfig verbosity globalFlags
@@ -478,14 +482,13 @@ loadConfigOrSandboxConfig :: Verbosity
                              -> Flag Bool    -- ^ Ignored if we're in a sandbox.
                              -> IO (UseSandbox, SavedConfig)
 loadConfigOrSandboxConfig verbosity globalFlags userInstallFlag = do
-  let configFileFlag        = globalConfigFile globalFlags
+  let configFileFlag        = globalConfigFile        globalFlags
       sandboxConfigFileFlag = globalSandboxConfigFile globalFlags
+      ignoreSandboxFlag     = globalIgnoreSandbox globalFlags
 
-  pkgEnvDir  <- getPkgEnvDir globalFlags
-  pkgEnvType <- case sandboxConfigFileFlag of
-    NoFlag -> classifyPackageEnvironment pkgEnvDir
-    Flag _ -> return SandboxPackageEnvironment
-
+  pkgEnvDir  <- getPkgEnvDir sandboxConfigFileFlag
+  pkgEnvType <- classifyPackageEnvironment pkgEnvDir sandboxConfigFileFlag
+                                           ignoreSandboxFlag
   case pkgEnvType of
     -- A @cabal.sandbox.config@ file (and possibly @cabal.config@) is present.
     SandboxPackageEnvironment -> do
@@ -498,12 +501,35 @@ loadConfigOrSandboxConfig verbosity globalFlags userInstallFlag = do
     UserPackageEnvironment    -> do
       config <- loadConfig verbosity configFileFlag userInstallFlag
       userConfig <- loadUserConfig verbosity pkgEnvDir
-      return (NoSandbox, config `mappend` userConfig)
+      let config' = config `mappend` userConfig
+      dieIfSandboxRequired config'
+      return (NoSandbox, config')
 
     -- Neither @cabal.sandbox.config@ nor @cabal.config@ are present.
     AmbientPackageEnvironment -> do
       config <- loadConfig verbosity configFileFlag userInstallFlag
+      dieIfSandboxRequired config
       return (NoSandbox, config)
+
+  where
+    -- Return the path to the package environment directory - either the
+    -- current directory or the one that @--sandbox-config-file@ resides in.
+    getPkgEnvDir :: (Flag FilePath) -> IO FilePath
+    getPkgEnvDir sandboxConfigFileFlag = do
+      case sandboxConfigFileFlag of
+        NoFlag    -> getCurrentDirectory
+        Flag path -> tryCanonicalizePath . takeDirectory $ path
+
+    -- Die if @--require-sandbox@ was specified and we're not inside a sandbox.
+    dieIfSandboxRequired :: SavedConfig -> IO ()
+    dieIfSandboxRequired config = checkFlag flag
+      where
+        flag = (globalRequireSandbox . savedGlobalFlags $ config)
+               `mappend` (globalRequireSandbox globalFlags)
+        checkFlag (Flag True)  =
+          die $ "'require-sandbox' is set to True, but no sandbox is present."
+        checkFlag (Flag False) = return ()
+        checkFlag (NoFlag)     = return ()
 
 -- | If we're in a sandbox, call @withSandboxBinDirOnSearchPath@, otherwise do
 -- nothing.
@@ -594,7 +620,7 @@ withSandboxPackageInfo verbosity configFlags globalFlags
                        configFlags comp conf
 
   -- Get the package descriptions for all add-source deps.
-  depsCabalFiles <- mapM findPackageDesc buildTreeRefs
+  depsCabalFiles <- mapM tryFindPackageDesc buildTreeRefs
   depsPkgDescs   <- mapM (readPackageDescription verbosity) depsCabalFiles
   let depsMap           = M.fromList (zip buildTreeRefs depsPkgDescs)
       isInstalled pkgid = not . null
@@ -611,9 +637,10 @@ withSandboxPackageInfo verbosity configFlags globalFlags
       modifiedDepsMap = M.fromList modifiedDeps
 
   assert (all (`S.member` allAddSourceDepsSet) modifiedAddSourceDeps) (return ())
-  unless (null modifiedDeps) $
-    notice verbosity $ "Some add-source dependencies have been modified. "
-                       ++ "They will be reinstalled..."
+  if (null modifiedDeps)
+    then info   verbosity $ "Found no modified add-source deps."
+    else notice verbosity $ "Some add-source dependencies have been modified. "
+                            ++ "They will be reinstalled..."
 
   -- Get the package ids of the remaining add-source deps (some are possibly not
   -- installed).
@@ -650,19 +677,16 @@ maybeReinstallAddSourceDeps :: Verbosity
                                -> ConfigFlags      -- ^ Saved configure flags
                                                    -- (from dist/setup-config)
                                -> GlobalFlags
-                               -> IO (UseSandbox, WereDepsReinstalled)
+                               -> IO (UseSandbox, SavedConfig
+                                     ,WereDepsReinstalled)
 maybeReinstallAddSourceDeps verbosity numJobsFlag configFlags' globalFlags' = do
-  currentDir <- getCurrentDirectory
-  pkgEnvType <- classifyPackageEnvironment currentDir
-  case pkgEnvType of
-    AmbientPackageEnvironment -> return (NoSandbox, NoDepsReinstalled)
-    UserPackageEnvironment    -> return (NoSandbox, NoDepsReinstalled)
-    SandboxPackageEnvironment -> do
-      (sandboxDir, pkgEnv)    <- tryLoadSandboxConfig verbosity globalFlags'
-
-      -- Actually reinstall the modified add-source deps.
-      let config         = pkgEnvSavedConfig pkgEnv
-          configFlags    = savedConfigureFlags config
+  (useSandbox, config) <- loadConfigOrSandboxConfig verbosity globalFlags'
+                          (configUserInstall configFlags')
+  case useSandbox of
+    NoSandbox             -> return (NoSandbox, config, NoDepsReinstalled)
+    UseSandbox sandboxDir -> do
+      -- Reinstall the modified add-source deps.
+      let configFlags    = savedConfigureFlags config
                            `mappendSomeSavedFlags`
                            configFlags'
           configExFlags  = defaultConfigExFlags
@@ -681,7 +705,7 @@ maybeReinstallAddSourceDeps verbosity numJobsFlag configFlags' globalFlags' = do
       depsReinstalled <- reinstallAddSourceDeps verbosity
                          configFlags configExFlags installFlags globalFlags
                          sandboxDir
-      return (UseSandbox sandboxDir, depsReinstalled)
+      return (UseSandbox sandboxDir, config, depsReinstalled)
 
   where
 

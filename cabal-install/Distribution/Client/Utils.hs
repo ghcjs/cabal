@@ -2,14 +2,17 @@
 
 module Distribution.Client.Utils ( MergeResult(..)
                                  , mergeBy, duplicates, duplicatesBy
-                                 , inDir, numberOfProcessors
+                                 , inDir, determineNumJobs, numberOfProcessors
                                  , removeExistingFile
                                  , makeAbsoluteToCwd, filePathToByteString
                                  , byteStringToFilePath, tryCanonicalizePath
-                                 , canonicalizePathNoThrow )
+                                 , canonicalizePathNoThrow
+                                 , moreRecentFile, existsAndIsMoreRecentThan )
        where
 
-import Distribution.Compat.Exception ( catchIO )
+import Distribution.Compat.Exception   ( catchIO )
+import Distribution.Client.Compat.Time ( getModTime )
+import Distribution.Simple.Setup       ( Flag(..) )
 import qualified Data.ByteString.Lazy as BS
 import Control.Monad
          ( when )
@@ -32,8 +35,10 @@ import System.FilePath
 import System.IO.Unsafe ( unsafePerformIO )
 
 #if defined(mingw32_HOST_OS)
+import Prelude hiding (ioError)
 import Control.Monad (liftM2, unless)
 import System.Directory (doesDirectoryExist)
+import System.IO.Error (ioError, mkIOError, doesNotExistErrorType)
 #endif
 
 -- | Generic merging utility. For sorted input lists this is a full outer join.
@@ -88,6 +93,14 @@ foreign import ccall "getNumberOfProcessors" c_getNumberOfProcessors :: IO CInt
 numberOfProcessors :: Int
 numberOfProcessors = fromEnum $ unsafePerformIO c_getNumberOfProcessors
 
+-- | Determine the number of jobs to use given the value of the '-j' flag.
+determineNumJobs :: Flag (Maybe Int) -> Int
+determineNumJobs numJobsFlag =
+  case numJobsFlag of
+    NoFlag        -> 1
+    Flag Nothing  -> numberOfProcessors
+    Flag (Just n) -> n
+
 -- | Given a relative path, make it absolute relative to the current
 -- directory. Absolute paths are returned unmodified.
 makeAbsoluteToCwd :: FilePath -> IO FilePath
@@ -139,8 +152,8 @@ tryCanonicalizePath path = do
 #if defined(mingw32_HOST_OS)
   exists <- liftM2 (||) (doesFileExist ret) (doesDirectoryExist ret)
   unless exists $
-    error $ ret ++ ": canonicalizePath: does not exist "
-                ++ "(No such file or directory)"
+    ioError $ mkIOError doesNotExistErrorType "canonicalizePath"
+                        Nothing (Just ret)
 #endif
   return ret
 
@@ -149,3 +162,26 @@ tryCanonicalizePath path = do
 canonicalizePathNoThrow :: FilePath -> IO FilePath
 canonicalizePathNoThrow path = do
   canonicalizePath path `catchIO` (\_ -> return path)
+
+--------------------
+-- Modification time
+
+-- | Like Distribution.Simple.Utils.moreRecentFile, but uses getModTime instead
+-- of getModificationTime for higher precision. We can't merge the two because
+-- Distribution.Client.Time uses MIN_VERSION macros.
+moreRecentFile :: FilePath -> FilePath -> IO Bool
+moreRecentFile a b = do
+  exists <- doesFileExist b
+  if not exists
+    then return True
+    else do tb <- getModTime b
+            ta <- getModTime a
+            return (ta > tb)
+
+-- | Like 'moreRecentFile', but also checks that the first file exists.
+existsAndIsMoreRecentThan :: FilePath -> FilePath -> IO Bool
+existsAndIsMoreRecentThan a b = do
+  exists <- doesFileExist a
+  if not exists
+    then return False
+    else a `moreRecentFile` b

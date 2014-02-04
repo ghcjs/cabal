@@ -12,9 +12,11 @@
 -----------------------------------------------------------------------------
 module Distribution.Client.Configure (
     configure,
+    chooseCabalVersion,
   ) where
 
 import Distribution.Client.Dependency
+import Distribution.Client.Dependency.Types (AllowNewer(..), isAllowNewer)
 import qualified Distribution.Client.InstallPlan as InstallPlan
 import Distribution.Client.InstallPlan (InstallPlan)
 import Distribution.Client.IndexUtils as IndexUtils
@@ -36,6 +38,7 @@ import Distribution.Simple.Setup
 import Distribution.Simple.PackageIndex (PackageIndex)
 import Distribution.Simple.Utils
          ( defaultPackageDesc )
+import qualified Distribution.InstalledPackageInfo as Installed
 import Distribution.Package
          ( Package(..), packageName, Dependency(..), thisPackageVersion )
 import Distribution.PackageDescription.Parse
@@ -45,13 +48,28 @@ import Distribution.PackageDescription.Configuration
 import Distribution.Version
          ( anyVersion, thisVersion )
 import Distribution.Simple.Utils as Utils
-         ( notice, info, debug, die )
+         ( notice, debug, die )
 import Distribution.System
          ( Platform )
 import Distribution.Verbosity as Verbosity
          ( Verbosity )
+import Distribution.Version
+         ( Version(..), VersionRange, orLaterVersion )
 
 import Data.Monoid (Monoid(..))
+
+-- | Choose the Cabal version such that the setup scripts compiled against this
+-- version will support the given command-line flags.
+chooseCabalVersion :: ConfigExFlags -> Maybe Version -> VersionRange
+chooseCabalVersion configExFlags maybeVersion =
+  maybe defaultVersionRange thisVersion maybeVersion
+  where
+    allowNewer = fromFlagOrDefault False $
+                 fmap isAllowNewer (configAllowNewer configExFlags)
+
+    defaultVersionRange = if allowNewer
+                          then orLaterVersion (Version [1,19,2] [])
+                          else anyVersion
 
 -- | Configure the package found in the local directory
 configure :: Verbosity
@@ -77,13 +95,10 @@ configure verbosity packageDBs repos comp platform conf
   maybePlan <- foldProgress logMsg (return . Left) (return . Right)
                             progress
   case maybePlan of
-    Left message -> do
-      info verbosity message
-      setupWrapper verbosity (setupScriptOptions installedPkgIndex) Nothing
-        configureCommand (const configFlags) extraArgs
+    Left message -> die message
 
     Right installPlan -> case InstallPlan.ready installPlan of
-      [pkg@(ConfiguredPackage (SourcePackage _ _ (LocalUnpackedPackage _) _) _ _ _)] ->
+      [pkg@(ReadyPackage (SourcePackage _ _ (LocalUnpackedPackage _) _) _ _ _)] ->
         configurePackage verbosity
           (InstallPlan.planPlatform installPlan)
           (InstallPlan.planCompiler installPlan)
@@ -95,7 +110,7 @@ configure verbosity packageDBs repos comp platform conf
 
   where
     setupScriptOptions index = SetupScriptOptions {
-      useCabalVersion  = maybe anyVersion thisVersion
+      useCabalVersion  = chooseCabalVersion configExFlags
                          (flagToMaybe (configCabalVersion configExFlags)),
       useCompiler      = Just comp,
       usePlatform      = Just platform,
@@ -150,16 +165,18 @@ planLocalPackage verbosity comp platform configFlags configExFlags installedPkgI
         fromFlagOrDefault False $ configBenchmarks configFlags
 
       resolverParams =
+          removeUpperBounds (fromFlagOrDefault AllowNewerNone $
+                             configAllowNewer configExFlags)
 
-          addPreferences
+        . addPreferences
             -- preferences from the config file or command line
             [ PackageVersionPreference name ver
             | Dependency name ver <- configPreferences configExFlags ]
 
         . addConstraints
             -- version constraints from the config file or command line
-            -- TODO: should warn or error on constraints that are not on direct deps
-            -- or flag constraints not on the package in question.
+            -- TODO: should warn or error on constraints that are not on direct
+            -- deps or flag constraints not on the package in question.
             (map userToPackageConstraint (configExConstraints configExFlags))
 
         . addConstraints
@@ -184,20 +201,22 @@ planLocalPackage verbosity comp platform configFlags configExFlags installedPkgI
 
 
 -- | Call an installer for an 'SourcePackage' but override the configure
--- flags with the ones given by the 'ConfiguredPackage'. In particular the
--- 'ConfiguredPackage' specifies an exact 'FlagAssignment' and exactly
+-- flags with the ones given by the 'ReadyPackage'. In particular the
+-- 'ReadyPackage' specifies an exact 'FlagAssignment' and exactly
 -- versioned package dependencies. So we ignore any previous partial flag
 -- assignment or dependency constraints and use the new ones.
 --
+-- NB: when updating this function, don't forget to also update
+-- 'installReadyPackage' in D.C.Install.
 configurePackage :: Verbosity
                  -> Platform -> CompilerId
                  -> SetupScriptOptions
                  -> ConfigFlags
-                 -> ConfiguredPackage
+                 -> ReadyPackage
                  -> [String]
                  -> IO ()
 configurePackage verbosity platform comp scriptOptions configFlags
-  (ConfiguredPackage (SourcePackage _ gpkg _ _) flags stanzas deps) extraArgs =
+  (ReadyPackage (SourcePackage _ gpkg _ _) flags stanzas deps) extraArgs =
 
   setupWrapper verbosity
     scriptOptions (Just pkg) configureCommand configureFlags extraArgs
@@ -205,14 +224,23 @@ configurePackage verbosity platform comp scriptOptions configFlags
   where
     configureFlags   = filterConfigureFlags configFlags {
       configConfigurationsFlags = flags,
-      configConstraints         = map thisPackageVersion deps,
-      configVerbosity           = toFlag verbosity,
-      configBenchmarks          = toFlag (BenchStanzas `elem` stanzas),
-      configTests               = toFlag (TestStanzas `elem` stanzas)
+      -- We generate the legacy constraints as well as the new style precise
+      -- deps.  In the end only one set gets passed to Setup.hs configure,
+      -- depending on the Cabal version we are talking to.
+      configConstraints  = [ thisPackageVersion (packageId deppkg)
+                           | deppkg <- deps ],
+      configDependencies = [ (packageName (Installed.sourcePackageId deppkg),
+                              Installed.installedPackageId deppkg)
+                           | deppkg <- deps ],
+      -- Use '--exact-configuration' if supported.
+      configExactConfiguration = toFlag True,
+      configVerbosity          = toFlag verbosity,
+      configBenchmarks         = toFlag (BenchStanzas `elem` stanzas),
+      configTests              = toFlag (TestStanzas `elem` stanzas)
     }
 
     pkg = case finalizePackageDescription flags
            (const True)
            platform comp [] (enableStanzas stanzas gpkg) of
-      Left _ -> error "finalizePackageDescription ConfiguredPackage failed"
+      Left _ -> error "finalizePackageDescription ReadyPackage failed"
       Right (desc, _) -> desc

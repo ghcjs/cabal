@@ -244,7 +244,7 @@ checkLibrary _pkg lib =
   catMaybes [
 
     check (not (null moduleDuplicates)) $
-       PackageBuildWarning $
+       PackageBuildImpossible $
             "Duplicate modules in library: "
          ++ commaSep (map display moduleDuplicates)
   ]
@@ -275,7 +275,7 @@ checkExecutable pkg exe =
         ++ "To use this feature you must specify 'cabal-version: >= 1.18'."
 
   , check (not (null moduleDuplicates)) $
-       PackageBuildWarning $
+       PackageBuildImpossible $
             "Duplicate modules in executable '" ++ exeName exe ++ "': "
          ++ commaSep (map display moduleDuplicates)
   ]
@@ -301,7 +301,7 @@ checkTestSuite pkg test =
       _ -> Nothing
 
   , check (not $ null moduleDuplicates) $
-      PackageBuildWarning $
+      PackageBuildImpossible $
            "Duplicate modules in test suite '" ++ testName test ++ "': "
         ++ commaSep (map display moduleDuplicates)
 
@@ -359,7 +359,7 @@ checkBenchmark pkg bm =
       _ -> Nothing
 
   , check (not $ null moduleDuplicates) $
-      PackageBuildWarning $
+      PackageBuildImpossible $
            "Duplicate modules in benchmark '" ++ benchmarkName bm ++ "': "
         ++ commaSep (map display moduleDuplicates)
 
@@ -533,7 +533,7 @@ checkLicense pkg =
   , check (license pkg `notElem` [AllRightsReserved, PublicDomain]
            -- AllRightsReserved and PublicDomain are not strictly
            -- licenses so don't need license files.
-        && null (licenseFile pkg)) $
+        && null (licenseFiles pkg)) $
       PackageDistSuspicious "A 'license-file' is not specified."
   ]
   where
@@ -1328,30 +1328,30 @@ checkPackageContent :: Monad m => CheckPackageContentOps m
                     -> PackageDescription
                     -> m [PackageCheck]
 checkPackageContent ops pkg = do
-  licenseError    <- checkLicenseExists   ops pkg
+  licenseErrors   <- checkLicensesExist   ops pkg
   setupError      <- checkSetupExists     ops pkg
   configureError  <- checkConfigureExists ops pkg
   localPathErrors <- checkLocalPathsExist ops pkg
   vcsLocation     <- checkMissingVcsInfo  ops pkg
 
-  return $ catMaybes [licenseError, setupError, configureError]
+  return $ licenseErrors
+        ++ catMaybes [setupError, configureError]
         ++ localPathErrors
         ++ vcsLocation
 
-checkLicenseExists :: Monad m => CheckPackageContentOps m
+checkLicensesExist :: Monad m => CheckPackageContentOps m
                    -> PackageDescription
-                   -> m (Maybe PackageCheck)
-checkLicenseExists ops pkg
-  | null (licenseFile pkg) = return Nothing
-  | otherwise = do
-    exists <- doesFileExist ops file
-    return $ check (not exists) $
-      PackageBuildWarning $
-           "The 'license-file' field refers to the file " ++ quote file
-        ++ " which does not exist."
-
+                   -> m [PackageCheck]
+checkLicensesExist ops pkg = do
+    exists <- mapM (doesFileExist ops) (licenseFiles pkg)
+    return
+      [ PackageBuildWarning $
+           "The '" ++ fieldname ++ "' field refers to the file "
+        ++ quote file ++ " which does not exist."
+      | (file, False) <- zip (licenseFiles pkg) exists ]
   where
-    file = licenseFile pkg
+    fieldname | length (licenseFiles pkg) == 1 = "license-file"
+              | otherwise                      = "license-files"
 
 checkSetupExists :: Monad m => CheckPackageContentOps m
                  -> PackageDescription
