@@ -8,7 +8,8 @@ module Distribution.Simple.GHCJS (
         registerPackage,
         componentGhcOptions,
         ghcLibDir,
-        ghcDynamic
+        ghcDynamic,
+        invokeHcPkg
   ) where
 
 import Control.Monad (when)
@@ -29,10 +30,11 @@ import Distribution.Simple.Program
          , ProgramSearchPath, rawSystemProgramConf
          , requireProgramVersion
          , userMaybeSpecifyPath, programPath
-         , addKnownPrograms, updateProgram
+         , addKnownPrograms, updateProgram, lookupProgram
          , ghcjsProgram, ghcjsPkgProgram, hsc2hsProgram
          , c2hsProgram
          )
+import qualified Distribution.Simple.Program.HcPkg as HcPkg
 import Distribution.Simple.Program.GHC ( GhcOptions )
 import qualified Distribution.Simple.Setup as Cabal
         ( Flag )
@@ -273,11 +275,6 @@ libAbiHash :: Verbosity
 libAbiHash verbosity pkg_descr lbi lib clbi = do
   GHC.libAbiHash verbosity pkg_descr (makeGhcLbi False lbi) lib clbi
 
-initPackageDB :: Verbosity
-              -> ProgramConfiguration -> FilePath -> IO ()
-initPackageDB verbosity pc d = do
-  GHC.initPackageDB verbosity pc d
-
 registerPackage :: Verbosity
                 -> InstalledPackageInfo
                 -> PackageDescription
@@ -336,4 +333,22 @@ makeGhcLbi ghcFlavour lbi =
         then lbi { compiler = c { compilerId = cid } }
         else lbi { compiler = c { compilerId = cid' } }
 
+
+-- -----------------------------------------------------------------------------
+-- Registering
+
+-- | Create an empty package DB at the specified location.
+initPackageDB :: Verbosity -> ProgramConfiguration -> FilePath -> IO ()
+initPackageDB verbosity conf dbPath = HcPkg.init verbosity ghcjsPkgProg dbPath
+  where
+    Just ghcjsPkgProg = lookupProgram ghcjsPkgProgram conf
+
+-- | Run 'ghcjs-pkg' using a given package DB stack, directly forwarding the
+-- provided command-line arguments to it.
+invokeHcPkg :: Verbosity -> ProgramConfiguration -> PackageDBStack -> [String]
+               -> IO ()
+invokeHcPkg verbosity conf dbStack extraArgs =
+    HcPkg.invoke verbosity ghcjsPkgProg dbStack extraArgs
+  where
+    Just ghcjsPkgProg = lookupProgram ghcjsPkgProgram conf
 

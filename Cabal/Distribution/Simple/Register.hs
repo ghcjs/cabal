@@ -223,6 +223,7 @@ initPackageDB :: Verbosity -> Compiler -> ProgramConfiguration -> FilePath
 initPackageDB verbosity comp conf dbPath =
   case (compilerFlavor comp) of
     GHC -> GHC.initPackageDB verbosity conf dbPath
+    GHCJS -> GHCJS.initPackageDB verbosity conf dbPath
     HaskellSuite {} -> HaskellSuite.initPackageDB verbosity conf dbPath
     _   -> die "Distribution.Simple.Register.initPackageDB: \
                \not implemented for this compiler"
@@ -233,7 +234,8 @@ invokeHcPkg :: Verbosity -> Compiler -> ProgramConfiguration -> PackageDBStack
                 -> [String] -> IO ()
 invokeHcPkg verbosity comp conf dbStack extraArgs =
     case (compilerFlavor comp) of
-      GHC -> GHC.invokeHcPkg verbosity conf dbStack extraArgs
+      GHC   -> GHC.invokeHcPkg verbosity conf dbStack extraArgs
+      GHCJS -> GHCJS.invokeHcPkg verbosity conf dbStack extraArgs
       _   -> die "Distribution.Simple.Register.invokeHcPkg: \
                  \not implemented for this compiler"
 
