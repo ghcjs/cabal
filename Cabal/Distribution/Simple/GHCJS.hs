@@ -32,7 +32,7 @@ import Distribution.Simple.Program
          , userMaybeSpecifyPath, programPath
          , addKnownPrograms, updateProgram, lookupProgram
          , ghcjsProgram, ghcjsPkgProgram, hsc2hsProgram
-         , c2hsProgram
+         , c2hsProgram, stripProgram
          )
 import qualified Distribution.Simple.Program.HcPkg as HcPkg
 import Distribution.Simple.Program.GHC ( GhcOptions )
@@ -259,11 +259,13 @@ installExe verbosity lbi installDirs buildPref
   let exeFileName = exeName exe
       fixedExeBaseName = progprefix ++ exeName exe ++ progsuffix
       installBinary dest = do
-          rawSystemProgramConf verbosity ghcjsProgram (withPrograms lbi)
+          rawSystemProgramConf verbosity ghcjsProgram (withPrograms lbi) $
             [ "--install-executable"
-            , "-from", buildPref </> exeName exe </> exeFileName
-            , "-to", dest
-            ]
+            , buildPref </> exeName exe </> exeFileName
+            , "-o", dest
+            ] ++ case (stripExes lbi, lookupProgram stripProgram $ withPrograms lbi) of
+                    (True, Just strip) -> ["--strip-program=" ++ programPath strip]
+                    _ -> []
   installBinary (binDir </> fixedExeBaseName)
 
 libAbiHash :: Verbosity
