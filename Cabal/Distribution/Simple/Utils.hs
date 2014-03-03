@@ -208,7 +208,7 @@ import System.Process (runInteractiveProcess, waitForProcess, proc,
 import System.Process (showCommandForUser)
 #endif
 
-#ifndef mingw32_HOST_OS
+#if !defined(mingw32_HOST_OS) && !defined(ghcjs_HOST_OS)
 import System.Posix.Signals (installHandler, sigINT, sigQUIT, Handler(..))
 import System.Process.Internals (defaultSignal, runGenProcess_)
 #else
@@ -399,7 +399,7 @@ printRawCommandAndArgsAndEnv verbosity path args env
 -- way that rawSystem handles it, but rawSystem doesn't allow us to pass
 -- an environment.
 syncProcess :: String -> Process.CreateProcess -> IO ExitCode
-#if mingw32_HOST_OS
+#if defined(mingw32_HOST_OS) || defined(ghcjs_HOST_OS)
 syncProcess _fun c = do
   (_,_,_,p) <- createProcess c
   waitForProcess p
