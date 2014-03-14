@@ -26,6 +26,7 @@ module Distribution.Client.Setup
     , freezeCommand, FreezeFlags(..)
     , getCommand, unpackCommand, GetFlags(..)
     , checkCommand
+    , formatCommand
     , uploadCommand, UploadFlags(..)
     , reportCommand, ReportFlags(..)
     , runCommand
@@ -635,6 +636,16 @@ checkCommand = CommandUI {
     commandOptions      = \_ -> []
   }
 
+formatCommand  :: CommandUI (Flag Verbosity)
+formatCommand = CommandUI {
+    commandName         = "format",
+    commandSynopsis     = "Reformat the .cabal file using the standard style.",
+    commandDescription  = Nothing,
+    commandUsage        = \pname -> "Usage: " ++ pname ++ " format [FILE]\n",
+    commandDefaultFlags = toFlag normal,
+    commandOptions      = \_ -> []
+  }
+
 runCommand :: CommandUI (BuildFlags, BuildExFlags)
 runCommand = CommandUI {
     commandName         = "run",
@@ -647,7 +658,7 @@ runCommand = CommandUI {
     commandDefaultFlags = mempty,
     commandOptions      =
       \showOrParseArgs -> liftOptions fst setFst
-                          (Cabal.buildOptions progConf showOrParseArgs)
+                          (commandOptions parent showOrParseArgs)
                           ++
                           liftOptions snd setSnd
                           (buildExOptions showOrParseArgs)
@@ -656,7 +667,7 @@ runCommand = CommandUI {
     setFst a (_,b) = (a,b)
     setSnd b (a,_) = (a,b)
 
-    progConf = defaultProgramConfiguration
+    parent = Cabal.buildCommand defaultProgramConfiguration
 
 -- ------------------------------------------------------------
 -- * Report flags
@@ -1024,10 +1035,10 @@ haddockOptions showOrParseArgs
                           | descr <- optionDescr opt] }
     | opt <- commandOptions Cabal.haddockCommand showOrParseArgs
     , let name = optionName opt
-    , name `elem` ["hoogle", "html", "html-location",
-                   "executables", "internal", "css",
-                   "hyperlink-source", "hscolour-css",
-                   "contents-location"]
+    , name `elem` ["hoogle", "html", "html-location"
+                  ,"executables", "tests", "benchmarks", "all", "internal", "css"
+                  ,"hyperlink-source", "hscolour-css"
+                  ,"contents-location"]
     ]
   where
     fmapOptFlags :: (OptFlags -> OptFlags) -> OptDescr a -> OptDescr a
