@@ -43,6 +43,7 @@ import Language.Haskell.Extension ( Language(..), Extension(..) )
 import Distribution.Verbosity
 import Distribution.Version
          ( Version(..), anyVersion, orLaterVersion )
+import Distribution.Simple.Program.Builtin ( haddockProgram )
 import Distribution.Simple.BuildPaths
 import Distribution.Simple.Utils
 import Distribution.System ( Platform )
@@ -87,13 +88,17 @@ configure verbosity hcPath hcPkgPath conf0 = do
     ++ programPath ghcjsPkgProg
     ++ " was built with GHC version " ++ display ghcjsPkgGhcVersion
 
-  -- be sure to use our versions of hsc2hs, c2hs and ghc
+  -- be sure to use our versions of hsc2hs, c2hs, haddock and ghc
   let hsc2hsProgram' =
         hsc2hsProgram { programFindLocation =
                           guessHsc2hsFromGhcjsPath ghcjsProg }
       c2hsProgram' =
         c2hsProgram { programFindLocation =
                           guessC2hsFromGhcjsPath ghcjsProg }
+
+      haddockProgram' =
+        haddockProgram { programFindLocation =
+                          guessHaddockFromGhcjsPath ghcjsProg }
 
       ghcProg' = ghcjsProg { programId      = "ghc"
                            , programVersion = Just ghcjsGhcVersion
@@ -102,9 +107,10 @@ configure verbosity hcPath hcPkgPath conf0 = do
                            { programId      = "ghc-pkg"
                            , programVersion =  Just ghcjsPkgGhcVersion
                            }
+
       conf3 = updateProgram ghcProg'
             $ updateProgram ghcPkgProg'
-            $ addKnownPrograms [ hsc2hsProgram', c2hsProgram'] conf2
+            $ addKnownPrograms [ hsc2hsProgram', c2hsProgram', haddockProgram' ] conf2
 
   languages  <- getLanguages  verbosity ghcjsProg
   extensions <- getExtensions verbosity ghcjsProg
@@ -144,6 +150,10 @@ guessHsc2hsFromGhcjsPath = guessToolFromGhcjsPath hsc2hsProgram
 guessC2hsFromGhcjsPath :: ConfiguredProgram -> Verbosity
                        -> ProgramSearchPath -> IO (Maybe FilePath)
 guessC2hsFromGhcjsPath = guessToolFromGhcjsPath c2hsProgram
+
+guessHaddockFromGhcjsPath :: ConfiguredProgram -> Verbosity
+                          -> ProgramSearchPath -> IO (Maybe FilePath)
+guessHaddockFromGhcjsPath = guessToolFromGhcjsPath haddockProgram
 
 guessToolFromGhcjsPath :: Program -> ConfiguredProgram
                        -> Verbosity -> ProgramSearchPath
