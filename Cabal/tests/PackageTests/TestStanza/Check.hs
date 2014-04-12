@@ -24,7 +24,7 @@ suite ghcPath = TestCase $ do
     result <- cabal_configure spec ghcPath
     assertOutputDoesNotContain "unknown section type" result
     genPD <- readPackageDescription silent pdFile
-    let compiler = CompilerId GHC $ Version [6, 12, 2] []
+    let compiler = CompilerId GHC (Version [6, 12, 2] []) Nothing
         anticipatedTestSuite = emptyTestSuite
             { testName = "dummy"
             , testInterface = TestSuiteExeV10 (Version [1,0] []) "dummy.hs"

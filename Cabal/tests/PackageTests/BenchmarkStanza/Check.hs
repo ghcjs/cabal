@@ -29,7 +29,7 @@ suite ghcPath = TestCase $ do
     result <- cabal_configure spec ghcPath
     assertOutputDoesNotContain "unknown section type" result
     genPD <- readPackageDescription silent pdFile
-    let compiler = CompilerId GHC $ Version [6, 12, 2] []
+    let compiler = CompilerId GHC (Version [6, 12, 2] []) Nothing
         anticipatedBenchmark = emptyBenchmark
             { benchmarkName = "dummy"
             , benchmarkInterface = BenchmarkExeV10 (Version [1,0] []) "dummy.hs"
