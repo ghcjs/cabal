@@ -69,7 +69,7 @@ import Distribution.Simple.BuildPaths
          ( autogenModulesDir, autogenModuleName, cppHeaderName, exeExtension )
 import Distribution.Simple.Register
          ( registerPackage, inplaceInstalledPackageInfo )
-import Distribution.Simple.Test ( stubFilePath, stubName )
+import Distribution.Simple.Test.LibV09 ( stubFilePath, stubName )
 import Distribution.Simple.Utils
          ( createDirectoryIfMissingVerbose, rewriteFile
          , die, info, debug, warn, setupMessage )
@@ -168,7 +168,7 @@ repl pkg_descr lbi flags suffixes args = do
                          pkg_descr lbi' suffixes comp clbi distPref
     | (cname, clbi) <- init componentsToBuild ]
 
-  -- repl for target components
+  -- REPL for target components
   let (cname, clbi) = componentForRepl
       comp = getComponent pkg_descr cname
       lbi' = lbiForComponent comp lbi
@@ -202,12 +202,12 @@ buildComponent verbosity numJobs pkg_descr lbi suffixes
     pwd <- getCurrentDirectory
     let installedPkgInfo =
           (inplaceInstalledPackageInfo pwd distPref pkg_descr lib lbi clbi) {
-            -- The inplace registration uses the "-inplace" suffix,
+            -- The in place registration uses the "-inplace" suffix,
             -- not an ABI hash.
             IPI.installedPackageId = inplacePackageId (packageId installedPkgInfo)
           }
     registerPackage verbosity
-      installedPkgInfo pkg_descr lbi True -- True meaning inplace
+      installedPkgInfo pkg_descr lbi True -- True meaning in place
       (withPackageDB lbi)
 
 
@@ -443,7 +443,7 @@ addInternalBuildTools pkg lbi bi progs =
 
 
 -- TODO: build separate libs in separate dirs so that we can build
--- multiple libs, e.g. for 'LibTest' library-style testsuites
+-- multiple libs, e.g. for 'LibTest' library-style test suites
 buildLib :: Verbosity -> Flag (Maybe Int)
                       -> PackageDescription -> LocalBuildInfo
                       -> Library            -> ComponentLocalBuildInfo -> IO ()

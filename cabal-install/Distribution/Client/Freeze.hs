@@ -33,10 +33,11 @@ import Distribution.Client.Sandbox.Types
          ( SandboxPackageInfo(..) )
 
 import Distribution.Package
-         ( packageId, packageName, packageVersion )
+         ( Package, PackageIdentifier, packageId, packageName, packageVersion )
 import Distribution.Simple.Compiler
          ( Compiler(compilerId), PackageDBStack )
 import Distribution.Simple.PackageIndex (PackageIndex)
+import qualified Distribution.Client.PackageIndex as PackageIndex
 import Distribution.Simple.Program
          ( ProgramConfiguration )
 import Distribution.Simple.Setup
@@ -50,6 +51,8 @@ import Distribution.Text
 import Distribution.Verbosity
          ( Verbosity )
 
+import Control.Monad
+         ( when )
 import qualified Data.ByteString.Lazy.Char8 as BS.Char8
 import Data.Monoid
          ( mempty )
@@ -63,7 +66,7 @@ import Distribution.Version
 -- ------------------------------------------------------------
 
 --TODO:
--- * Don't overwrite all of `cabal.config`, just the constaints section.
+-- * Don't overwrite all of `cabal.config`, just the constraints section.
 -- * Should the package represented by `UserTargetLocalDir "."` be
 --   constrained too? What about `base`?
 
@@ -92,6 +95,7 @@ freeze verbosity packageDBs repos comp platform conf mSandboxPkgInfo
                        (packageIndex sourcePkgDb)
                        [UserTargetLocalDir "."]
 
+    sanityCheck pkgSpecifiers
     pkgs  <- planPackages
                verbosity comp platform mSandboxPkgInfo freezeFlags
                installedPkgIndex sourcePkgDb pkgSpecifiers
@@ -109,6 +113,10 @@ freeze verbosity packageDBs repos comp platform conf mSandboxPkgInfo
   where
     dryRun = fromFlag (freezeDryRun freezeFlags)
 
+    sanityCheck pkgSpecifiers =
+      when (not . null $ [n | n@(NamedPackage _ _) <- pkgSpecifiers]) $
+        die $ "internal error: 'resolveUserTargets' returned "
+           ++ "unexpected named package specifiers!"
 
 planPackages :: Verbosity
              -> Compiler
@@ -132,7 +140,9 @@ planPackages verbosity comp platform mSandboxPkgInfo freezeFlags
                      solver
                      resolverParams
 
-  return $ InstallPlan.toList installPlan
+  return $ either id
+                  (error "planPackages: installPlan contains broken packages")
+                  (pruneInstallPlan installPlan pkgSpecifiers)
 
   where
     resolverParams =
@@ -157,7 +167,27 @@ planPackages verbosity comp platform mSandboxPkgInfo freezeFlags
     shadowPkgs       = fromFlag (freezeShadowPkgs       freezeFlags)
     maxBackjumps     = fromFlag (freezeMaxBackjumps     freezeFlags)
 
-freezePackages :: Verbosity -> [PlanPackage] -> IO ()
+
+-- | Remove all unneeded packages from an install plan.
+--
+-- A package is unneeded if it is not a dependency (directly or
+-- transitively) of any of the 'PackageSpecifier SourcePackage's.  This is
+-- useful for removing previously installed packages which are no longer
+-- required from the install plan.
+pruneInstallPlan :: InstallPlan.InstallPlan
+                 -> [PackageSpecifier SourcePackage]
+                 -> Either [PlanPackage] [(PlanPackage, [PackageIdentifier])]
+pruneInstallPlan installPlan pkgSpecifiers =
+    mapLeft PackageIndex.allPackages $
+    PackageIndex.dependencyClosure pkgIdx pkgIds
+  where
+    pkgIdx = PackageIndex.fromList $ InstallPlan.toList installPlan
+    pkgIds = [ packageId pkg | SpecificSourcePackage pkg <- pkgSpecifiers ]
+    mapLeft f (Left v)  = Left $ f v
+    mapLeft _ (Right v) = Right v
+
+
+freezePackages :: Package pkg => Verbosity -> [pkg] -> IO ()
 freezePackages verbosity pkgs = do
     pkgEnv <- fmap (createPkgEnv . addConstraints) $ loadUserConfig verbosity ""
     writeFileAtomic userPackageEnvironmentFile $ showPkgEnv pkgEnv
@@ -177,7 +207,7 @@ freezePackages verbosity pkgs = do
     showPkgEnv = BS.Char8.pack . showPackageEnvironment
 
 
-formatPkgs :: [PlanPackage] -> [String]
+formatPkgs :: Package pkg => [pkg] -> [String]
 formatPkgs = map $ showPkg . packageId
   where
     showPkg pid = name pid ++ " == " ++ version pid

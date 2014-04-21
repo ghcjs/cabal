@@ -207,12 +207,12 @@ install verbosity packageDBs repos comp platform conf useSandbox mSandboxPkgInfo
       ++ "recreating the sandbox."
     logMsg message rest = debugNoWrap verbosity message >> rest
 
--- TODO: Make InstallContext a proper datatype with documented fields.
+-- TODO: Make InstallContext a proper data type with documented fields.
 -- | Common context for makeInstallPlan and processInstallPlan.
 type InstallContext = ( PackageIndex, SourcePackageDb
                       , [UserTarget], [PackageSpecifier SourcePackage] )
 
--- TODO: Make InstallArgs a proper datatype with documented fields or just get
+-- TODO: Make InstallArgs a proper data type with documented fields or just get
 -- rid of it completely.
 -- | Initial arguments given to 'install' or 'makeInstallContext'.
 type InstallArgs = ( PackageDBStack
@@ -286,12 +286,13 @@ processInstallPlan verbosity
     checkPrintPlan verbosity installedPkgIndex installPlan sourcePkgDb
       installFlags pkgSpecifiers
 
-    unless dryRun $ do
+    unless (dryRun || nothingToInstall) $ do
       installPlan' <- performInstallations verbosity
                       args installedPkgIndex installPlan
       postInstallActions verbosity args userTargets installPlan'
   where
     dryRun = fromFlag (installDryRun installFlags)
+    nothingToInstall = null (InstallPlan.ready installPlan)
 
 -- ------------------------------------------------------------
 -- * Installation planning
@@ -1222,7 +1223,7 @@ installUnpackedPackage
   -> IO BuildResult
 installUnpackedPackage verbosity buildLimit installLock numJobs
                        scriptOptions miscOptions
-                       configFlags installConfigFlags haddockFlags
+                       configFlags installFlags haddockFlags
                        compid platform pkg pkgoverride workingDir useLogFile = do
 
   -- Override the .cabal file if necessary
@@ -1298,12 +1299,13 @@ installUnpackedPackage verbosity buildLimit installLock numJobs
       buildDistPref  = configDistPref configFlags,
       buildVerbosity = toFlag verbosity'
     }
-    shouldHaddock    = fromFlag (installDocumentation installConfigFlags)
+    shouldHaddock    = fromFlag (installDocumentation installFlags)
     haddockFlags' _   = haddockFlags {
       haddockVerbosity = toFlag verbosity',
       haddockDistPref  = configDistPref configFlags
     }
     testsEnabled = fromFlag (configTests configFlags)
+                   && fromFlagOrDefault False (installRunTests installFlags)
     testFlags _ = Cabal.emptyTestFlags {
       Cabal.testDistPref = configDistPref configFlags
     }
@@ -1386,7 +1388,7 @@ installUnpackedPackage verbosity buildLimit installLock numJobs
 
     reexec cmd = do
       -- look for our own executable file and re-exec ourselves using a helper
-      -- program like sudo to elevate priviledges:
+      -- program like sudo to elevate privileges:
       self <- getExecutablePath
       weExist <- doesFileExist self
       if weExist
@@ -1410,7 +1412,7 @@ onFailure result action =
 
 
 -- ------------------------------------------------------------
--- * Wierd windows hacks
+-- * Weird windows hacks
 -- ------------------------------------------------------------
 
 withWin32SelfUpgrade :: Verbosity

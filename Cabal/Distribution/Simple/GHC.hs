@@ -43,7 +43,8 @@ module Distribution.Simple.GHC (
         registerPackage,
         componentGhcOptions,
         ghcLibDir,
-        ghcDynamic
+        ghcDynamic,
+        ghcGlobalPackageDB,
  ) where
 
 import Distribution.Simple.GHC.Base
@@ -255,7 +256,7 @@ getInstalledPackages verbosity packagedbs conf = do
         [(_,[rts])]
            -> PackageIndex.insert (removeMingwIncludeDir rts) index
         _  -> index -- No (or multiple) ghc rts package is registered!!
-                    -- Feh, whatever, the ghc testsuite does some crazy stuff.
+                    -- Feh, whatever, the ghc test suite does some crazy stuff.
 
 -- | Given a list of @(PackageDB, InstalledPackageInfo)@ pairs, produce a
 -- @PackageIndex@. Helper function used by 'getPackageDBContents' and
@@ -287,10 +288,17 @@ ghcLibDir' verbosity ghcProg =
     (reverse . dropWhile isSpace . reverse) `fmap`
      rawSystemProgramStdout verbosity ghcProg ["--print-libdir"]
 
+
+-- | Return the 'FilePath' to the global GHC package database.
+ghcGlobalPackageDB :: Verbosity -> ConfiguredProgram -> IO FilePath
+ghcGlobalPackageDB verbosity ghcProg =
+    (reverse . dropWhile isSpace . reverse) `fmap`
+     rawSystemProgramStdout verbosity ghcProg ["--print-global-package-db"]
+
 -- Cabal does not use the environment variable GHC_PACKAGE_PATH; let users
 -- know that this is the case. See ticket #335. Simply ignoring it is not a
 -- good idea, since then ghc and cabal are looking at different sets of
--- package dbs and chaos is likely to ensue.
+-- package DBs and chaos is likely to ensue.
 checkPackageDbEnvVar :: IO ()
 checkPackageDbEnvVar = do
     hasGPP <- (getEnv "GHC_PACKAGE_PATH" >> return True)
@@ -745,7 +753,7 @@ buildOrReplExe forRepl verbosity numJobsFlag _pkg_descr lbi
       -- With dynamic-by-default GHC the TH object files loaded at compile-time
       -- need to be .dyn_o instead of .o.
       doingTH = EnableExtension TemplateHaskell `elem` allExtensions exeBi
-      -- Should we use -dynamic-too instead of compilng twice?
+      -- Should we use -dynamic-too instead of compiling twice?
       useDynToo = dynamicTooSupported && isGhcDynamic
                   && doingTH && withStaticExe && null (ghcSharedOptions exeBi)
       compileTHOpts | isGhcDynamic = dynOpts
@@ -981,7 +989,7 @@ installExe verbosity lbi installDirs buildPref
 installLib    :: Verbosity
               -> LocalBuildInfo
               -> FilePath  -- ^install location
-              -> FilePath  -- ^install location for dynamic librarys
+              -> FilePath  -- ^install location for dynamic libraries
               -> FilePath  -- ^Build location
               -> PackageDescription
               -> Library

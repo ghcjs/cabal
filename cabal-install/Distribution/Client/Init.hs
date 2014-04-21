@@ -36,7 +36,7 @@ import Data.Char
 import Data.List
   ( intercalate, nub, groupBy, (\\) )
 import Data.Maybe
-  ( fromMaybe, isJust, catMaybes )
+  ( fromMaybe, isJust, catMaybes, listToMaybe )
 import Data.Function
   ( on )
 import qualified Data.Map as M
@@ -67,9 +67,10 @@ import Language.Haskell.Extension ( Language(..) )
 import Distribution.Client.Init.Types
   ( InitFlags(..), PackageType(..), Category(..) )
 import Distribution.Client.Init.Licenses
-  ( bsd2, bsd3, gplv2, gplv3, lgpl2, lgpl3, agplv3, apache20, mpl20 )
+  ( bsd2, bsd3, gplv2, gplv3, lgpl21, lgpl3, agplv3, apache20, mit, mpl20 )
 import Distribution.Client.Init.Heuristics
-  ( guessPackageName, guessAuthorNameMail, SourceFileEntry(..),
+  ( guessPackageName, guessAuthorNameMail, guessMainFileCandidates,
+    SourceFileEntry(..),
     scanForModules, neededBuildPrograms )
 
 import Distribution.License
@@ -154,7 +155,7 @@ getPackageName flags = do
               ?>> Just `fmap` (getCurrentDirectory >>= guessPackageName)
 
   pkgName' <-     return (flagToMaybe $ packageName flags)
-              ?>> maybePrompt flags (promptStr "Package name" guess)
+              ?>> maybePrompt flags (prompt "Package name" guess)
               ?>> return guess
 
   return $ flags { packageName = maybeToFlag pkgName' }
@@ -266,8 +267,28 @@ getLibOrExec flags = do
                                    [Library, Executable]
                                    Nothing display False)
            ?>> return (Just Library)
+  mainFile <- if isLib /= Just Executable then return Nothing else
+                    getMainFile flags
 
-  return $ flags { packageType = maybeToFlag isLib }
+  return $ flags { packageType = maybeToFlag isLib
+                 , mainIs = maybeToFlag mainFile
+                 }
+
+-- | Try to guess the main file of the executable, and prompt the user to choose
+-- one of them. Top-level modules including the word 'Main' in the file name
+-- will be candidates, and shorter filenames will be preferred.
+getMainFile :: InitFlags -> IO (Maybe FilePath)
+getMainFile flags =
+  return (flagToMaybe $ mainIs flags)
+  ?>> do
+    candidates <- guessMainFileCandidates flags
+    let showCandidate = either (++" (does not yet exist)") id
+        defaultFile = listToMaybe candidates
+    maybePrompt flags (either id (either id id) `fmap`
+                       promptList "What is the main module of the executable"
+                       candidates
+                       defaultFile showCandidate True)
+      ?>> return (fmap (either id id) defaultFile)
 
 -- | Ask for the base language of the package.
 getLanguage :: InitFlags -> IO InitFlags
@@ -550,8 +571,8 @@ writeLicense flags = do
           Flag (GPL (Just (Version {versionBranch = [3]})))
             -> Just gplv3
 
-          Flag (LGPL (Just (Version {versionBranch = [2]})))
-            -> Just lgpl2
+          Flag (LGPL (Just (Version {versionBranch = [2, 1]})))
+            -> Just lgpl21
 
           Flag (LGPL (Just (Version {versionBranch = [3]})))
             -> Just lgpl3
@@ -561,6 +582,9 @@ writeLicense flags = do
 
           Flag (Apache (Just (Version {versionBranch = [2, 0]})))
             -> Just apache20
+
+          Flag MIT
+            -> Just $ mit authors year
 
           Flag (MPL (Version {versionBranch = [2, 0]}))
             -> Just mpl20
@@ -594,7 +618,7 @@ writeCabalFile flags@(InitFlags{packageName = NoFlag}) = do
   message flags "Error: no package name provided."
   return False
 writeCabalFile flags@(InitFlags{packageName = Flag p}) = do
-  let cabalFileName = p ++ ".cabal"
+  let cabalFileName = display p ++ ".cabal"
   message flags $ "Generating " ++ cabalFileName ++ "..."
   writeFileSafe flags cabalFileName (generateCabalFile cabalFileName flags)
   return True
@@ -644,7 +668,7 @@ generateCabalFile fileName c =
          $$ text ""
     else empty)
   $$
-  vcat [ fieldS "name"          (packageName   c)
+  vcat [ field  "name"          (packageName   c)
                 (Just "The name of the package.")
                 True
 
@@ -709,8 +733,10 @@ generateCabalFile fileName c =
 
        , case packageType c of
            Flag Executable ->
-             text "\nexecutable" <+> text (fromMaybe "" . flagToMaybe $ packageName c) $$ nest 2 (vcat
-             [ fieldS "main-is" NoFlag (Just ".hs or .lhs file containing the Main module.") True
+             text "\nexecutable" <+>
+             text (maybe "" display . flagToMaybe $ packageName c) $$
+             nest 2 (vcat
+             [ fieldS "main-is" (mainIs c) (Just ".hs or .lhs file containing the Main module.") True
 
              , generateBuildInfo Executable c
              ])

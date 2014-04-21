@@ -255,7 +255,7 @@ getExtensions verbosity ghcProg
                       then -- ghc-6.8 introduced RecordPuns however it
                            -- should have been NamedFieldPuns. We now
                            -- encourage packages to use NamedFieldPuns
-                           -- so for compatability we fake support for
+                           -- so for compatibility we fake support for
                            -- it in ghc-6.8 by making it an alias for
                            -- the old RecordPuns extension.
                            (EnableExtension  NamedFieldPuns, "-XRecordPuns") :

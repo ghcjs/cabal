@@ -1,5 +1,5 @@
 name: Cabal
-version: 1.19.2
+version: 1.21.0.0
 copyright: 2003-2006, Isaac Jones
            2005-2011, Duncan Coutts
 license: BSD3
@@ -24,7 +24,7 @@ build-type: Custom
 -- that we build Setup.lhs using our own local Cabal source code.
 
 extra-source-files:
-  README tests/README changelog
+  README.md tests/README.md changelog
 
   -- Generated with 'misc/gen-extra-source-files.sh' & 'M-x sort-lines':
   tests/PackageTests/BenchmarkExeV10/Foo.hs
@@ -137,6 +137,7 @@ library
   ghc-options: -Wall -fno-ignore-asserts -fwarn-tabs
 
   exposed-modules:
+    Distribution.Compat.CreatePipe
     Distribution.Compat.Environment
     Distribution.Compat.Exception
     Distribution.Compat.ReadP
@@ -197,6 +198,9 @@ library
     Distribution.Simple.Setup
     Distribution.Simple.SrcDist
     Distribution.Simple.Test
+    Distribution.Simple.Test.ExeV10
+    Distribution.Simple.Test.LibV09
+    Distribution.Simple.Test.Log
     Distribution.Simple.UHC
     Distribution.Simple.UserHooks
     Distribution.Simple.Utils
@@ -231,7 +235,7 @@ test-suite unit-tests
     test-framework-hunit,
     test-framework-quickcheck2,
     HUnit,
-    QuickCheck,
+    QuickCheck < 2.7,
     Cabal
   ghc-options: -Wall
   default-language: Haskell98
@@ -241,7 +245,6 @@ test-suite package-tests
   type: exitcode-stdio-1.0
   main-is: PackageTests.hs
   other-modules:
-    Distribution.Compat.CreatePipe
     PackageTests.BenchmarkExeV10.Check
     PackageTests.BenchmarkOptions.Check
     PackageTests.BenchmarkStanza.Check
@@ -276,7 +279,7 @@ test-suite package-tests
     test-framework-quickcheck2 >= 0.2.12,
     test-framework-hunit,
     HUnit,
-    QuickCheck >= 2.1.0.1,
+    QuickCheck >= 2.1.0.1 && < 2.7,
     Cabal,
     process,
     directory,

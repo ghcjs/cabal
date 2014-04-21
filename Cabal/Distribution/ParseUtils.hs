@@ -32,8 +32,9 @@ module Distribution.ParseUtils (
         parseTestedWithQ, parseLicenseQ, parseLanguageQ, parseExtensionQ,
         parseSepList, parseCommaList, parseOptCommaList,
         showFilePath, showToken, showTestedWith, showFreeText, parseFreeText,
-        field, simpleField, listField, spaceListField, commaListField,
-        optsField, liftField, boolField, parseQuoted,
+        field, simpleField, listField, listFieldWithSep, spaceListField,
+        commaListField, commaListFieldWithSep, commaNewLineListField,
+        optsField, liftField, boolField, parseQuoted, indentWith,
 
         UnrecFieldParser, warnUnrec, ignoreUnrec,
   ) where
@@ -65,7 +66,8 @@ import Data.List (sortBy)
 
 -- -----------------------------------------------------------------------------
 
-type LineNo = Int
+type LineNo    = Int
+type Separator = ([Doc] -> Doc)
 
 data PError = AmbiguousParse String LineNo
             | NoParse String LineNo
@@ -188,37 +190,51 @@ simpleField :: String -> (a -> Doc) -> ReadP a a
 simpleField name showF readF get set
   = liftField get set $ field name showF readF
 
+commaListFieldWithSep :: Separator -> String -> (a -> Doc) -> ReadP [a] a
+                      -> (b -> [a]) -> ([a] -> b -> b) -> FieldDescr b
+commaListFieldWithSep separator name showF readF get set =
+   liftField get set' $
+     field name showF' (parseCommaList readF)
+   where
+     set' xs b = set (get b ++ xs) b
+     showF'    = separator . punctuate comma . map showF
+ 
 commaListField :: String -> (a -> Doc) -> ReadP [a] a
                  -> (b -> [a]) -> ([a] -> b -> b) -> FieldDescr b
-commaListField name showF readF get set =
-  liftField get set' $
-    field name (fsep . punctuate comma . map showF) (parseCommaList readF)
-  where
-    set' xs b = set (get b ++ xs) b
+commaListField = commaListFieldWithSep fsep
+
+commaNewLineListField :: String -> (a -> Doc) -> ReadP [a] a
+                 -> (b -> [a]) -> ([a] -> b -> b) -> FieldDescr b
+commaNewLineListField = commaListFieldWithSep sep
 
 spaceListField :: String -> (a -> Doc) -> ReadP [a] a
                  -> (b -> [a]) -> ([a] -> b -> b) -> FieldDescr b
 spaceListField name showF readF get set =
   liftField get set' $
-    field name (fsep . map showF) (parseSpaceList readF)
+    field name showF' (parseSpaceList readF)
   where
     set' xs b = set (get b ++ xs) b
+    showF'    = fsep . map showF
+
+listFieldWithSep :: Separator -> String -> (a -> Doc) -> ReadP [a] a
+                 -> (b -> [a]) -> ([a] -> b -> b) -> FieldDescr b
+listFieldWithSep separator name showF readF get set =
+  liftField get set' $
+    field name showF' (parseOptCommaList readF)
+  where
+    set' xs b = set (get b ++ xs) b
+    showF'    = separator . map showF
 
 listField :: String -> (a -> Doc) -> ReadP [a] a
-                 -> (b -> [a]) -> ([a] -> b -> b) -> FieldDescr b
-listField name showF readF get set =
-  liftField get set' $
-    field name (fsep . map showF) (parseOptCommaList readF)
-  where
-    set' xs b = set (get b ++ xs) b
+          -> (b -> [a]) -> ([a] -> b -> b) -> FieldDescr b
+listField = listFieldWithSep fsep
 
 optsField :: String -> CompilerFlavor -> (b -> [(CompilerFlavor,[String])])
              -> ([(CompilerFlavor,[String])] -> b -> b) -> FieldDescr b
 optsField name flavor get set =
    liftField (fromMaybe [] . lookup flavor . get)
              (\opts b -> set (reorder (update flavor opts (get b))) b) $
-        field name (hsep . map text)
-                   (sepBy parseTokenQ' (munch1 isSpace))
+        field name showF (sepBy parseTokenQ' (munch1 isSpace))
   where
         update _ opts l | all null opts = l  --empty opts as if no opts
         update f opts [] = [(f,opts)]
@@ -226,6 +242,7 @@ optsField name flavor get set =
            | f == f'   = (f, opts' ++ opts) : rest
            | otherwise = (f',opts') : update f opts rest
         reorder = sortBy (comparing fst)
+        showF   = hsep . map text
 
 -- TODO: this is a bit smelly hack. It's because we want to parse bool fields
 --       liberally but not accept new parses. We cannot do that with ReadP
@@ -246,11 +263,28 @@ boolField name get set = liftField get set (FieldDescr name showF readF)
           "The '" ++ name ++ "' field is case sensitive, use 'True' or 'False'."
 
 ppFields :: [FieldDescr a] -> a -> Doc
-ppFields fields x = vcat [ ppField name (getter x)
-                         | FieldDescr name getter _ <- fields]
+ppFields fields x =
+   vcat [ ppField name (getter x) | FieldDescr name getter _ <- fields ]
 
 ppField :: String -> Doc -> Doc
-ppField name fielddoc = text name <> colon <+> fielddoc
+ppField name fielddoc 
+   | isEmpty fielddoc         = empty
+   | name `elem` nestedFields = text name <> colon $+$ nest indentWith fielddoc
+   | otherwise                = text name <> colon <+> fielddoc
+   where
+      nestedFields =
+         [ "description"
+         , "build-depends"
+         , "data-files"
+         , "extra-source-files"
+         , "extra-tmp-files"
+         , "exposed-modules"
+         , "c-sources"
+         , "extra-libraries"
+         , "includes"
+         , "install-includes"
+         , "other-modules"
+         ]
 
 showFields :: [FieldDescr a] -> a -> String
 showFields fields = render . ($+$ text "") . ppFields fields
@@ -407,7 +441,7 @@ data Token =
        -- > else
        -- >    other
        --
-       -- this is ok
+       -- this is OK
        Line LineNo Indent HasTabs String
      | Span LineNo                String  -- ^ span in a line, following brackets
      | OpenBracket LineNo | CloseBracket LineNo
@@ -415,7 +449,7 @@ data Token =
 type Indent = Int
 type HasTabs = Bool
 
--- | Tokenise a single line, splitting on '{' '}' and the spans inbetween.
+-- | Tokenise a single line, splitting on '{' '}' and the spans in between.
 -- Also trims leading & trailing space on those spans within the line.
 tokeniseLine :: (LineNo, Indent, HasTabs, String) -> [Token]
 tokeniseLine (n0, i, t, l) = case split n0 l of
@@ -452,8 +486,8 @@ mkTree :: [Token] -> ParseResult [SyntaxTree]
 mkTree toks =
   layout 0 [] toks >>= \(trees, trailing) -> case trailing of
     []               -> return trees
-    OpenBracket  n:_ -> syntaxError n "mismatched backets, unexpected {"
-    CloseBracket n:_ -> syntaxError n "mismatched backets, unexpected }"
+    OpenBracket  n:_ -> syntaxError n "mismatched brackets, unexpected {"
+    CloseBracket n:_ -> syntaxError n "mismatched brackets, unexpected }"
     -- the following two should never happen:
     Span n     l  :_ -> syntaxError n $ "unexpected span: " ++ show l
     Line n _ _ l  :_ -> syntaxError n $ "unexpected line: " ++ show l
@@ -710,3 +744,7 @@ lines_ s                 =  let (l, s') = break (== '\n') s
                             in  l : case s' of
                                         []    -> []
                                         (_:s'') -> lines_ s''
+
+-- | the indentation used for pretty printing
+indentWith :: Int
+indentWith = 4

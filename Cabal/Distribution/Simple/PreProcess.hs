@@ -60,7 +60,8 @@ import Distribution.Simple.Program
          , greencardProgram, cpphsProgram, hsc2hsProgram, c2hsProgram
          , happyProgram, alexProgram, haddockProgram, ghcProgram, ghcjsProgram
          , gccProgram )
-import Distribution.Simple.Test ( writeSimpleTestStub, stubFilePath, stubName )
+import Distribution.Simple.Test.LibV09
+         ( writeSimpleTestStub, stubFilePath, stubName )
 import Distribution.System
          ( OS(..), buildOS, Arch(..), Platform(..) )
 import Distribution.Text

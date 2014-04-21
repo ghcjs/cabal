@@ -89,11 +89,11 @@ data ShowOrParseArgs = ShowArgs | ParseArgs
 type Name        = String
 type Description = String
 
--- | We usually have a datatype for storing configuration values, where
+-- | We usually have a data type for storing configuration values, where
 --   every field stores a configuration option, and the user sets
 --   the value either via command line flags or a configuration file.
 --   An individual OptionField models such a field, and we usually
---   build a list of options associated to a configuration datatype.
+--   build a list of options associated to a configuration data type.
 data OptionField a = OptionField {
   optionName        :: Name,
   optionDescr       :: [OptDescr a] }
@@ -222,7 +222,11 @@ viewAsGetOpt (OptionField _n aa) = concatMap optDescrToGetOpt aa
                    set' (Just txt) = readEOrFail set txt
     optDescrToGetOpt (ChoiceOpt alts) =
          [GetOpt.Option sf lf (GetOpt.NoArg set) d | (d,(sf,lf),set,_) <- alts ]
-    optDescrToGetOpt (BoolOpt d (sfT,lfT) (sfF, lfF) set _) =
+    optDescrToGetOpt (BoolOpt d (sfT, lfT) ([],  [])  set _) =
+         [ GetOpt.Option sfT lfT (GetOpt.NoArg (set True))  d ]
+    optDescrToGetOpt (BoolOpt d ([],  [])  (sfF, lfF) set _) =
+         [ GetOpt.Option sfF lfF (GetOpt.NoArg (set False)) d ]
+    optDescrToGetOpt (BoolOpt d (sfT,lfT)  (sfF, lfF) set _) =
          [ GetOpt.Option sfT lfT (GetOpt.NoArg (set True))  ("Enable " ++ d)
          , GetOpt.Option sfF lfF (GetOpt.NoArg (set False)) ("Disable " ++ d) ]
 
@@ -329,12 +333,15 @@ commandShowOptions command v = concat
   [ showOptDescr v  od | o <- commandOptions command ParseArgs
                        , od <- optionDescr o]
   where
+    maybePrefix []       = []
+    maybePrefix (lOpt:_) = ["--" ++ lOpt]
+
     showOptDescr :: a -> OptDescr a -> [String]
-    showOptDescr x (BoolOpt _ (_,lfT:_) (_,lfF:_) _ enabled)
+    showOptDescr x (BoolOpt _ (_,lfTs) (_,lfFs) _ enabled)
       = case enabled x of
           Nothing -> []
-          Just True  -> ["--" ++ lfT]
-          Just False -> ["--" ++ lfF]
+          Just True  -> maybePrefix lfTs
+          Just False -> maybePrefix lfFs
     showOptDescr x c@ChoiceOpt{}
       = ["--" ++ val | val <- getCurrentChoice c x]
     showOptDescr x (ReqArg _ (_ssff,lf:_) _ _ showflag)
@@ -443,7 +450,7 @@ commandParseArgs command global args =
 
   where -- Note: It is crucial to use reverse function composition here or to
         -- reverse the flags here as we want to process the flags left to right
-        -- but data flow in function compsition is right to left.
+        -- but data flow in function composition is right to left.
         accum flags = foldr (flip (.)) id [ f | Right f <- flags ]
         unrecognised opts = [ "unrecognized "
                               ++ "'" ++ (commandName command) ++ "'"

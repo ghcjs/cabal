@@ -34,6 +34,7 @@ module Distribution.Client.Setup
     , sdistCommand, SDistFlags(..), SDistExFlags(..), ArchiveFormat(..)
     , win32SelfUpgradeCommand, Win32SelfUpgradeFlags(..)
     , sandboxCommand, defaultSandboxLocation, SandboxFlags(..)
+    , execCommand, ExecFlags(..)
 
     , parsePackageArgs
     --TODO: stop exporting these:
@@ -493,7 +494,7 @@ defaultFetchFlags = FetchFlags {
     fetchDryRun    = toFlag False,
     fetchSolver           = Flag defaultSolver,
     fetchMaxBackjumps     = Flag defaultMaxBackjumps,
-    fetchReorderGoals     = Flag False,
+    fetchReorderGoals     = Flag True,
     fetchIndependentGoals = Flag False,
     fetchShadowPkgs       = Flag False,
     fetchVerbosity = toFlag normal
@@ -559,7 +560,7 @@ defaultFreezeFlags = FreezeFlags {
     freezeDryRun           = toFlag False,
     freezeSolver           = Flag defaultSolver,
     freezeMaxBackjumps     = Flag defaultMaxBackjumps,
-    freezeReorderGoals     = Flag False,
+    freezeReorderGoals     = Flag True,
     freezeIndependentGoals = Flag False,
     freezeShadowPkgs       = Flag False,
     freezeVerbosity        = toFlag normal
@@ -933,7 +934,8 @@ data InstallFlags = InstallFlags {
     installBuildReports     :: Flag ReportLevel,
     installSymlinkBinDir    :: Flag FilePath,
     installOneShot          :: Flag Bool,
-    installNumJobs          :: Flag (Maybe Int)
+    installNumJobs          :: Flag (Maybe Int),
+    installRunTests         :: Flag Bool
   }
 
 defaultInstallFlags :: InstallFlags
@@ -942,7 +944,7 @@ defaultInstallFlags = InstallFlags {
     installHaddockIndex    = Flag docIndexFile,
     installDryRun          = Flag False,
     installMaxBackjumps    = Flag defaultMaxBackjumps,
-    installReorderGoals    = Flag False,
+    installReorderGoals    = Flag True,
     installIndependentGoals= Flag False,
     installShadowPkgs      = Flag False,
     installReinstall       = Flag False,
@@ -957,7 +959,8 @@ defaultInstallFlags = InstallFlags {
     installBuildReports    = Flag NoReports,
     installSymlinkBinDir   = mempty,
     installOneShot         = Flag False,
-    installNumJobs         = mempty
+    installNumJobs         = mempty,
+    installRunTests        = mempty
   }
   where
     docIndexFile = toPathTemplate ("$datadir" </> "doc" </> "index.html")
@@ -1136,6 +1139,11 @@ installOptions showOrParseArgs =
           installOneShot (\v flags -> flags { installOneShot = v })
           (yesNoOpt showOrParseArgs)
 
+      , option [] ["run-tests"]
+          "Run package test suites during installation."
+          installRunTests (\v flags -> flags { installRunTests = v })
+          trueArg
+
       , optionNumJobs
         installNumJobs (\v flags -> flags { installNumJobs = v })
 
@@ -1170,7 +1178,8 @@ instance Monoid InstallFlags where
     installBuildReports    = mempty,
     installSymlinkBinDir   = mempty,
     installOneShot         = mempty,
-    installNumJobs         = mempty
+    installNumJobs         = mempty,
+    installRunTests        = mempty
   }
   mappend a b = InstallFlags {
     installDocumentation   = combine installDocumentation,
@@ -1192,7 +1201,8 @@ instance Monoid InstallFlags where
     installBuildReports    = combine installBuildReports,
     installSymlinkBinDir   = combine installSymlinkBinDir,
     installOneShot         = combine installOneShot,
-    installNumJobs         = combine installNumJobs
+    installNumJobs         = combine installNumJobs,
+    installRunTests        = combine installRunTests
   }
     where combine field = field a `mappend` field b
 
@@ -1323,7 +1333,9 @@ initCommand = CommandUI {
       , option ['p'] ["package-name"]
         "Name of the Cabal package to create."
         IT.packageName (\v flags -> flags { IT.packageName = v })
-        (reqArgFlag "PACKAGE")
+        (reqArg "PACKAGE" (readP_to_E ("Cannot parse package name: "++)
+                                      (toFlag `fmap` parse))
+                          (flagToList . fmap display))
 
       , option [] ["version"]
         "Initial version of the package."
@@ -1388,6 +1400,12 @@ initCommand = CommandUI {
         IT.packageType
         (\v flags -> flags { IT.packageType = v })
         (noArg (Flag IT.Executable))
+
+      , option [] ["main-is"]
+        "Specify the main module."
+        IT.mainIs
+        (\v flags -> flags { IT.mainIs = v })
+        (reqArgFlag "FILE")
 
       , option [] ["language"]
         "Specify the default language."
@@ -1588,6 +1606,44 @@ instance Monoid SandboxFlags where
     sandboxVerbosity = combine sandboxVerbosity,
     sandboxSnapshot  = combine sandboxSnapshot,
     sandboxLocation  = combine sandboxLocation
+    }
+    where combine field = field a `mappend` field b
+
+-- ------------------------------------------------------------
+-- * Exec Flags
+-- ------------------------------------------------------------
+
+data ExecFlags = ExecFlags {
+  execVerbosity :: Flag Verbosity
+}
+
+defaultExecFlags :: ExecFlags
+defaultExecFlags = ExecFlags {
+  execVerbosity = toFlag normal
+  }
+
+execCommand :: CommandUI ExecFlags
+execCommand = CommandUI {
+  commandName         = "exec",
+  commandSynopsis     = "Run a command with the cabal environment",
+  commandDescription  = Nothing,
+  commandUsage        = \pname ->
+       "Usage: " ++ pname ++ " exec [FLAGS] COMMAND [-- [ARGS...]]\n\n"
+    ++ "Flags for exec:",
+
+  commandDefaultFlags = defaultExecFlags,
+  commandOptions      = \_ ->
+    [ optionVerbosity execVerbosity
+      (\v flags -> flags { execVerbosity = v })
+    ]
+  }
+
+instance Monoid ExecFlags where
+  mempty = ExecFlags {
+    execVerbosity = mempty
+    }
+  mappend a b = ExecFlags {
+    execVerbosity = combine execVerbosity
     }
     where combine field = field a `mappend` field b
 
