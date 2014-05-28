@@ -314,6 +314,7 @@ generalInstalledPackageInfo adjustRelIncDirs pkg lib clbi installDirs =
     hasModules = not $ null (exposedModules lib)
                     && null (otherModules bi)
     hasLibrary = hasModules || not (null (cSources bi))
+                            || not (null (jsSources bi))
 
 
 -- | Construct 'InstalledPackageInfo' for a library that is in place in the

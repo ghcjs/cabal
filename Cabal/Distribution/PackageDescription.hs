@@ -613,6 +613,7 @@ data BuildInfo = BuildInfo {
         pkgconfigDepends  :: [Dependency], -- ^ pkg-config packages that are used
         frameworks        :: [String], -- ^support frameworks for Mac OS X
         cSources          :: [FilePath],
+        jsSources         :: [FilePath],
         hsSourceDirs      :: [FilePath], -- ^ where to look for the Haskell module hierarchy
         otherModules      :: [ModuleName], -- ^ non-exposed or non-main modules
 
@@ -647,6 +648,7 @@ instance Monoid BuildInfo where
     pkgconfigDepends  = [],
     frameworks        = [],
     cSources          = [],
+    jsSources         = [],
     hsSourceDirs      = [],
     otherModules      = [],
     defaultLanguage   = Nothing,
@@ -674,6 +676,7 @@ instance Monoid BuildInfo where
     pkgconfigDepends  = combine    pkgconfigDepends,
     frameworks        = combineNub frameworks,
     cSources          = combineNub cSources,
+    jsSources         = combineNub jsSources,
     hsSourceDirs      = combineNub hsSourceDirs,
     otherModules      = combineNub otherModules,
     defaultLanguage   = combineMby defaultLanguage,
