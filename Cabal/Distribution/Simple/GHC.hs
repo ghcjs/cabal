@@ -33,7 +33,7 @@
 module Distribution.Simple.GHC (
         getGhcInfo,
         configure, getInstalledPackages, getPackageDBContents,
-        buildLib, buildExe,
+        buildLib, buildExe, buildExeWith,
         replLib, replExe,
         startInterpreter,
         installLib, installExe,
@@ -650,13 +650,21 @@ startInterpreter verbosity conf comp packageDBs = do
 buildExe, replExe :: Verbosity          -> Cabal.Flag (Maybe Int)
                   -> PackageDescription -> LocalBuildInfo
                   -> Executable         -> ComponentLocalBuildInfo -> IO ()
-buildExe = buildOrReplExe False
-replExe  = buildOrReplExe True
+buildExe = buildOrReplExe False []
+replExe  = buildOrReplExe True  []
 
-buildOrReplExe :: Bool -> Verbosity  -> Cabal.Flag (Maybe Int)
+-- | Build an executable with GHC, linking extra objects.
+buildExeWith :: [FilePath]
+             -> Verbosity          -> Cabal.Flag (Maybe Int)
+             -> PackageDescription -> LocalBuildInfo
+             -> Executable         -> ComponentLocalBuildInfo -> IO ()
+buildExeWith = buildOrReplExe False
+
+buildOrReplExe :: Bool               -> [FilePath]
+               -> Verbosity          -> Cabal.Flag (Maybe Int)
                -> PackageDescription -> LocalBuildInfo
                -> Executable         -> ComponentLocalBuildInfo -> IO ()
-buildOrReplExe forRepl verbosity numJobsFlag _pkg_descr lbi
+buildOrReplExe forRepl extraObjs verbosity numJobsFlag _pkg_descr lbi
   exe@Executable { exeName = exeName', modulePath = modPath } clbi = do
 
   (ghcProg, _) <- requireProgram verbosity ghcProgram (withPrograms lbi)
@@ -722,7 +730,7 @@ buildOrReplExe forRepl verbosity numJobsFlag _pkg_descr lbi
                       ghcOptLinkLibs       = extraLibs exeBi,
                       ghcOptLinkLibPath    = extraLibDirs exeBi,
                       ghcOptLinkFrameworks = PD.frameworks exeBi,
-                      ghcOptInputFiles     = [exeDir </> x | x <- cObjs]
+                      ghcOptInputFiles     = [exeDir </> x | x <- cObjs] ++ extraObjs
                    }
       replOpts   = baseOpts {
                       ghcOptExtra          = filterGhciFlags

@@ -12,10 +12,10 @@ module Distribution.Simple.GHCJS (
         invokeHcPkg
   ) where
 
-import Control.Monad (when)
+import Control.Monad ( unless, when )
 import Distribution.PackageDescription as PD
          ( PackageDescription, BuildInfo(..), Executable(..)
-         , Library(..), libModules )
+         , Library(..), buildInfo, libBuildInfo, libModules )
 import Distribution.InstalledPackageInfo
          ( InstalledPackageInfo )
 import Distribution.Simple.Compiler
@@ -48,7 +48,7 @@ import Distribution.Simple.BuildPaths
 import Distribution.Simple.Utils
 import Distribution.System ( Platform )
 import System.Directory ( doesFileExist )
-import System.FilePath  ( (</>), (<.>), takeDirectory, splitExtension )
+import System.FilePath  ( (</>), (<.>), takeDirectory, splitExtension, splitFileName )
 import qualified Data.Map as M
 import qualified Distribution.Simple.GHC.Base as Base
 import qualified Distribution.Simple.GHC as GHC
@@ -217,7 +217,12 @@ buildLib :: Verbosity
          -> Library
          -> ComponentLocalBuildInfo
          -> IO ()
-buildLib verbosity numJobsFlag pkg_descr lbi lib clbi =
+buildLib verbosity numJobsFlag pkg_descr lbi lib clbi = do
+  let targetDir = buildDir lbi </> "js"
+      sources   = map splitFileName (jsSources (libBuildInfo lib))
+  unless (null sources) $ do
+    info verbosity "Copying JavaScript Sources..."
+    copyFiles verbosity targetDir sources
   GHC.buildLib verbosity numJobsFlag pkg_descr (makeGhcLbi False lbi) lib clbi
 
 buildExe :: Verbosity
@@ -228,7 +233,8 @@ buildExe :: Verbosity
          -> ComponentLocalBuildInfo
          -> IO ()
 buildExe verbosity numJobsFlag pkg_descr lbi exe clbi =
-  GHC.buildExe verbosity numJobsFlag pkg_descr (makeGhcLbi False lbi) exe clbi
+  GHC.buildExeWith (jsSources (buildInfo exe))
+    verbosity numJobsFlag pkg_descr (makeGhcLbi False lbi) exe clbi
 
 installLib :: Verbosity
            -> LocalBuildInfo
@@ -241,6 +247,7 @@ installLib :: Verbosity
            -> IO ()
 installLib verbosity lbi targetDir dynlibTargetDir builtDir pkg lib clbi = do
   GHC.installLib verbosity (makeGhcLbi False lbi) targetDir dynlibTargetDir builtDir pkg lib clbi
+  installDirectoryContents verbosity (builtDir </> "js") (targetDir </> "js")
   whenVanilla $ mapM_ copyModuleFiles ["js_hi", "js_o"]
   whenProf    $ mapM_ copyModuleFiles ["js_p_hi", "js_p_o"]
   whenShared  $ mapM_ copyModuleFiles ["js_dyn_hi", "js_dyn_o"]
