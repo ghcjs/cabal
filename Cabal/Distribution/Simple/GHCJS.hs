@@ -47,7 +47,7 @@ import Distribution.Simple.Program.Builtin ( haddockProgram )
 import Distribution.Simple.BuildPaths
 import Distribution.Simple.Utils
 import Distribution.System ( Platform )
-import System.Directory ( doesFileExist )
+import System.Directory ( doesDirectoryExist, doesFileExist )
 import System.FilePath  ( (</>), (<.>), takeDirectory, splitExtension, splitFileName )
 import qualified Data.Map as M
 import qualified Distribution.Simple.GHC.Base as Base
@@ -247,7 +247,10 @@ installLib :: Verbosity
            -> IO ()
 installLib verbosity lbi targetDir dynlibTargetDir builtDir pkg lib clbi = do
   GHC.installLib verbosity (makeGhcLbi False lbi) targetDir dynlibTargetDir builtDir pkg lib clbi
-  installDirectoryContents verbosity (builtDir </> "js") (targetDir </> "js")
+  let jsDir = builtDir </> "js"
+  hasJsFiles <- doesDirectoryExist jsDir
+  when hasJsFiles $
+    installDirectoryContents verbosity jsDir (targetDir </> "js")
   whenVanilla $ mapM_ copyModuleFiles ["js_hi", "js_o"]
   whenProf    $ mapM_ copyModuleFiles ["js_p_hi", "js_p_o"]
   whenShared  $ mapM_ copyModuleFiles ["js_dyn_hi", "js_dyn_o"]
