@@ -10,6 +10,7 @@ module PackageTests.PackageTester
     -- * Running cabal commands
     , cabal_configure
     , cabal_build
+    , cabal_haddock
     , cabal_test
     , cabal_bench
     , cabal_install
@@ -20,6 +21,7 @@ module PackageTests.PackageTester
     -- * Test helpers
     , assertBuildSucceeded
     , assertBuildFailed
+    , assertHaddockSucceeded
     , assertTestSucceeded
     , assertInstallSucceeded
     , assertOutputContains
@@ -41,10 +43,10 @@ import System.Process (runProcess, waitForProcess)
 import Test.HUnit (Assertion, assertFailure)
 
 import Distribution.Simple.BuildPaths (exeExtension)
+import Distribution.Simple.Utils (printRawCommandAndArgs)
 import Distribution.Compat.CreatePipe (createPipe)
 import Distribution.ReadE (readEOrFail)
-import Distribution.Verbosity (Verbosity, deafening, flagToVerbosity, normal,
-                               verbose)
+import Distribution.Verbosity (Verbosity, flagToVerbosity, normal)
 
 data PackageSpec = PackageSpec
     { directory  :: FilePath
@@ -54,6 +56,7 @@ data PackageSpec = PackageSpec
 data Success = Failure
              | ConfigureSuccess
              | BuildSuccess
+             | HaddockSuccess
              | InstallSuccess
              | TestSuccess
              | BenchSuccess
@@ -111,6 +114,22 @@ cabal_build spec ghcPath = do
     res <- doCabalBuild spec ghcPath
     record spec res
     return res
+
+cabal_haddock :: PackageSpec -> [String] -> FilePath -> IO Result
+cabal_haddock spec extraArgs ghcPath = do
+    res <- doCabalHaddock spec extraArgs ghcPath
+    record spec res
+    return res
+
+doCabalHaddock :: PackageSpec -> [String] -> FilePath -> IO Result
+doCabalHaddock spec extraArgs ghcPath = do
+    configResult <- doCabalConfigure spec ghcPath
+    if successful configResult
+        then do
+            res <- cabal spec ("haddock" : extraArgs) ghcPath
+            return $ recordRun res HaddockSuccess configResult
+        else
+            return configResult
 
 unregister :: String -> FilePath -> IO ()
 unregister libraryName ghcPkgPath = do
@@ -201,13 +220,6 @@ run cwd path args = do
                 c <- hGetChar h
                 suckH (c:output) h
 
--- Copied from Distribution/Simple/Utils.hs
-printRawCommandAndArgs :: Verbosity -> FilePath -> [String] -> IO ()
-printRawCommandAndArgs verbosity path args
-    | verbosity >= deafening = print (path, args)
-    | verbosity >= verbose   = putStrLn $ unwords (path : args)
-    | otherwise              = return ()
-
 requireSuccess :: (String, ExitCode, String) -> IO ()
 requireSuccess (cmd, exitCode, output) =
     unless (exitCode == ExitSuccess) $
@@ -231,6 +243,12 @@ assertBuildFailed :: Result -> Assertion
 assertBuildFailed result = when (successful result) $
     assertFailure $
     "expected: \'setup build\' should fail\n" ++
+    "  output: " ++ outputText result
+
+assertHaddockSucceeded :: Result -> Assertion
+assertHaddockSucceeded result = unless (successful result) $
+    assertFailure $
+    "expected: \'setup haddock\' should succeed\n" ++
     "  output: " ++ outputText result
 
 assertTestSucceeded :: Result -> Assertion

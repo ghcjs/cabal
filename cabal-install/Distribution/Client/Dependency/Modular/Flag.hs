@@ -1,3 +1,4 @@
+{-# LANGUAGE DeriveFunctor #-}
 module Distribution.Client.Dependency.Modular.Flag where
 
 import Data.Map as M
@@ -10,14 +11,11 @@ import Distribution.Client.Types (OptionalStanza(..))
 
 -- | Flag name. Consists of a package instance and the flag identifier itself.
 data FN qpn = FN (PI qpn) Flag
-  deriving (Eq, Ord, Show)
+  deriving (Eq, Ord, Show, Functor)
 
 -- | Extract the package name from a flag name.
 getPN :: FN qpn -> qpn
 getPN (FN (PI qpn _) _) = qpn
-
-instance Functor FN where
-  fmap f (FN x y) = FN (fmap f x) y
 
 -- | Flag identifier. Just a string.
 type Flag = FlagName
@@ -25,9 +23,13 @@ type Flag = FlagName
 unFlag :: Flag -> String
 unFlag (FlagName fn) = fn
 
--- | Flag info. Default value, and whether the flag is manual.
--- Manual flags can only be set explicitly.
-data FInfo = FInfo { fdefault :: Bool, fmanual :: Bool }
+mkFlag :: String -> Flag
+mkFlag fn = FlagName fn
+
+-- | Flag info. Default value, whether the flag is manual, and
+-- whether the flag is weak. Manual flags can only be set explicitly.
+-- Weak flags are typically deferred by the solver.
+data FInfo = FInfo { fdefault :: Bool, fmanual :: Bool, fweak :: Bool }
   deriving (Eq, Ord, Show)
 
 -- | Flag defaults.
@@ -38,10 +40,7 @@ type QFN = FN QPN
 
 -- | Stanza name. Paired with a package name, much like a flag.
 data SN qpn = SN (PI qpn) OptionalStanza
-  deriving (Eq, Ord, Show)
-
-instance Functor SN where
-  fmap f (SN x y) = SN (fmap f x) y
+  deriving (Eq, Ord, Show, Functor)
 
 -- | Qualified stanza name.
 type QSN = SN QPN

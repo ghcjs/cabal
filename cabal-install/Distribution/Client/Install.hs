@@ -29,7 +29,7 @@ module Distribution.Client.Install (
   ) where
 
 import Data.List
-         ( unfoldr, nub, sort, (\\) )
+         ( isPrefixOf, unfoldr, nub, sort, (\\) )
 import qualified Data.Set as S
 import Data.Maybe
          ( isJust, fromMaybe, maybeToList )
@@ -334,6 +334,8 @@ planPackages comp platform mSandboxPkgInfo solver
 
       . setShadowPkgs shadowPkgs
 
+      . setStrongFlags strongFlags
+
       . setPreferenceDefault (if upgradeDeps then PreferAllLatest
                                              else PreferLatestForSelected)
 
@@ -379,6 +381,7 @@ planPackages comp platform mSandboxPkgInfo solver
     independentGoals = fromFlag (installIndependentGoals installFlags)
     avoidReinstalls  = fromFlag (installAvoidReinstalls  installFlags)
     shadowPkgs       = fromFlag (installShadowPkgs       installFlags)
+    strongFlags      = fromFlag (installStrongFlags      installFlags)
     maxBackjumps     = fromFlag (installMaxBackjumps     installFlags)
     upgradeDeps      = fromFlag (installUpgradeDeps      installFlags)
     onlyDeps         = fromFlag (installOnlyDeps         installFlags)
@@ -838,7 +841,8 @@ printBuildFailures plan =
     maybeOOM _        = ""
 #else
     maybeOOM e                    = maybe "" onExitFailure (fromException e)
-    onExitFailure (ExitFailure 9) =
+    onExitFailure (ExitFailure n)
+      | n == 9 || n == -9         =
       "\nThis may be due to an out-of-memory condition."
     onExitFailure _               = ""
 #endif
@@ -1048,8 +1052,8 @@ executeInstallPlan verbosity jobCtl useLogFile plan0 installPkg =
         -- now cannot build, we mark as failing due to 'DependentFailed'
         -- which kind of means it was not their fault.
 
-    -- Print last 10 lines of the build log if something went wrong, and
-    -- 'Installed $PKGID' otherwise.
+    -- Print build log if something went wrong, and 'Installed $PKGID'
+    -- otherwise.
     printBuildResult :: PackageId -> BuildResult -> IO ()
     printBuildResult pkgid buildResult = case buildResult of
         (Right _) -> notice verbosity $ "Installed " ++ display pkgid
@@ -1060,17 +1064,11 @@ executeInstallPlan verbosity jobCtl useLogFile plan0 installPkg =
               Nothing                 -> return ()
               Just (mkLogFileName, _) -> do
                 let logName = mkLogFileName pkgid
-                    n       = 10
-                putStr $ "Last " ++ (show n)
-                  ++ " lines of the build log ( " ++ logName ++ " ):\n"
-                printLastNLines logName n
+                putStr $ "Build log ( " ++ logName ++ " ):\n"
+                printFile logName
 
-    printLastNLines :: FilePath -> Int -> IO ()
-    printLastNLines path n = do
-      lns <- fmap lines $ readFile path
-      let len = length lns
-      let toDrop = if (len > n && n > 0) then (len - n) else 0
-      mapM_ putStrLn (drop toDrop lns)
+    printFile :: FilePath -> IO ()
+    printFile path = readFile path >>= putStr
 
 -- | Call an installer for an 'SourcePackage' but override the configure
 -- flags with the ones given by the 'ReadyPackage'. In particular the
@@ -1193,13 +1191,15 @@ installLocalTarballPackage verbosity jobLimit pkgid
           distDirPathTmp = absUnpackedPath </> (defaultDistPref ++ "-tmp")
           distDirPathNew = absUnpackedPath </> distPref
       distDirExists <- doesDirectoryExist distDirPath
-      when distDirExists $ do
+      when (distDirExists && distDirPath /= distDirPathNew) $ do
         -- NB: we need to handle the case when 'distDirPathNew' is a
-        -- subdirectory of 'distDirPath' (e.g. 'dist/dist-sandbox-3688fbc2').
+        -- subdirectory of 'distDirPath' (e.g. the former is
+        -- 'dist/dist-sandbox-3688fbc2' and the latter is 'dist').
         debug verbosity $ "Renaming '" ++ distDirPath ++ "' to '"
           ++ distDirPathTmp ++ "'."
         renameDirectory distDirPath distDirPathTmp
-        createDirectoryIfMissingVerbose verbosity False distDirPath
+        when (distDirPath `isPrefixOf` distDirPathNew) $
+          createDirectoryIfMissingVerbose verbosity False distDirPath
         debug verbosity $ "Renaming '" ++ distDirPathTmp ++ "' to '"
           ++ distDirPathNew ++ "'."
         renameDirectory distDirPathTmp distDirPathNew
