@@ -153,7 +153,9 @@ configure verbosity hcPath hcPkgPath conf0 = do
       }
       compPlatform = Base.targetPlatform ghcInfo
   -- configure gcc and ld
-  let conf4      = Base.configureToolchain ghcjsProg' ghcInfoMap conf3
+  let conf4      = if ghcjsNativeToo comp
+                     then Base.configureToolchain ghcjsProg' ghcInfoMap conf3
+                     else conf3
   return (comp, compPlatform, conf4)
 
 ghcjsNativeToo :: Compiler -> Bool
