@@ -47,7 +47,8 @@ import Distribution.Simple.PreProcess
          ( runSimplePreProcessor, ppUnlit )
 import Distribution.Simple.Program
          ( ProgramConfiguration, emptyProgramConfiguration
-         , getProgramSearchPath, getDbProgramOutput, runDbProgram, ghcProgram )
+         , getProgramSearchPath, getDbProgramOutput, runDbProgram, ghcProgram
+         , ghcjsProgram )
 import Distribution.Simple.Program.Find
          ( programSearchPathAsPATHVar )
 import Distribution.Simple.Program.Run
@@ -449,6 +450,7 @@ externalSetupMethod verbosity options pkg bt mkargs = do
     when (outOfDate || forceCompile) $ do
       debug verbosity "Setup executable needs to be updated, compiling..."
       (compiler, conf, options'') <- configureCompiler options'
+      debug verbosity ("compiler configured: " ++ show compiler)
       let cabalPkgid = PackageIdentifier (PackageName "Cabal") cabalLibVersion
       let ghcOptions = mempty {
               ghcOptVerbosity       = Flag verbosity
@@ -466,11 +468,14 @@ externalSetupMethod verbosity options pkg bt mkargs = do
             , ghcOptExtra           = ["-threaded"]
             }
       let ghcCmdLine = renderGhcOptions compiler ghcOptions
+          program = case Simple.compilerFlavor compiler of
+                      Simple.GHCJS -> ghcjsProgram
+                      _            -> ghcProgram
       case useLoggingHandle options of
-        Nothing          -> runDbProgram verbosity ghcProgram conf ghcCmdLine
+        Nothing          -> runDbProgram verbosity program conf ghcCmdLine
 
         -- If build logging is enabled, redirect compiler output to the log file.
-        (Just logHandle) -> do output <- getDbProgramOutput verbosity ghcProgram
+        (Just logHandle) -> do output <- getDbProgramOutput verbosity program
                                          conf ghcCmdLine
                                hPutStr logHandle output
     return setupProgFile

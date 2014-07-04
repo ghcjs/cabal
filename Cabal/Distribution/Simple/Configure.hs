@@ -517,7 +517,7 @@ configure (pkg_descr0, pbi) cfg
                   -- library, so we build one by default.
                   GHC.ghcDynamic comp
                 CompilerId GHCJS _ _ ->
-                  GHCJS.ghcDynamic comp
+                  GHCJS.ghcjsDynamic comp
                 _ -> False
 
         let lbi = LocalBuildInfo {

@@ -389,7 +389,7 @@ packageDbStackOpts hcPkg dbstack = case dbstack of
 
 packageDbFlag :: ConfiguredProgram -> String
 packageDbFlag hcPkg
-  | programVersion hcPkg < Just (Version [7,5] [])
+  | programVersion hcPkg < Just (Version [7,5] [] && programId hcPkg == "ghc-pkg")
   = "package-conf"
   | otherwise
   = "package-db"
