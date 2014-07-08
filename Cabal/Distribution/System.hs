@@ -69,6 +69,7 @@ data OS = Linux | Windows | OSX        -- tier 1 desktop OSs
         | Solaris | AIX | HPUX | IRIX  -- ageing Unix OSs
         | HaLVM                        -- bare metal / VMs / hypervisors
         | IOS                          -- iOS
+        | Ghcjs
         | OtherOS String
   deriving (Eq, Ord, Show, Read, Typeable, Data)
 
@@ -82,7 +83,8 @@ knownOSs = [Linux, Windows, OSX
            ,FreeBSD, OpenBSD, NetBSD, DragonFly
            ,Solaris, AIX, HPUX, IRIX
            ,HaLVM
-           ,IOS]
+           ,IOS
+           ,Ghcjs]
 
 osAliases :: ClassificationStrictness -> OS -> [String]
 osAliases Permissive Windows = ["mingw32", "win32", "cygwin32"]
