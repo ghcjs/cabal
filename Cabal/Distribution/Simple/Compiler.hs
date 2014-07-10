@@ -191,7 +191,10 @@ extensionToFlag comp ext = lookup ext (compilerExtensions comp)
 parmakeSupported :: Compiler -> Bool
 parmakeSupported comp =
   case compilerFlavor comp of
-    GHC -> case M.lookup "Support parallel --make" (compilerProperties comp) of
-      Just "YES" -> True
-      _          -> False
-    _   -> False
+    GHC   -> checkProp
+    GHCJS -> checkProp
+    _     -> False
+  where checkProp =
+          case M.lookup "Support parallel --make" (compilerProperties comp) of
+            Just "YES" -> True
+            _          -> False

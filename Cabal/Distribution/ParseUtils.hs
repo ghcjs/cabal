@@ -280,6 +280,7 @@ ppField name fielddoc
          , "extra-tmp-files"
          , "exposed-modules"
          , "c-sources"
+         , "js-sources"
          , "extra-libraries"
          , "includes"
          , "install-includes"

@@ -44,15 +44,17 @@ module Distribution.Simple.GHC (
         componentGhcOptions,
         ghcLibDir,
         ghcDynamic,
-        ghcGlobalPackageDB,
+        ghcGlobalPackageDB
  ) where
 
-import qualified Distribution.Simple.GHC.Common as Common
+import Distribution.Simple.GHC.Props ( getImplProps, ghcVersionImplProps )
+import qualified Distribution.Simple.GHC.Internal as Internal
 import qualified Distribution.Simple.GHC.IPI641 as IPI641
 import qualified Distribution.Simple.GHC.IPI642 as IPI642
 import Distribution.PackageDescription as PD
          ( PackageDescription(..), BuildInfo(..), Executable(..)
-         , Library(..), libModules, exeModules, hcOptions
+         , Library(..), libModules, exeModules
+         , hcOptions, hcProfOptions, hcSharedOptions
          , usedExtensions, allExtensions )
 import Distribution.InstalledPackageInfo
          ( InstalledPackageInfo )
@@ -127,7 +129,7 @@ configure verbosity hcPath hcPkgPath conf0 = do
     requireProgramVersion verbosity ghcProgram
       (orLaterVersion (Version [6,4] []))
       (userMaybeSpecifyPath "ghc" hcPath conf0)
-  let props = Common.ghcVersionImplProps ghcVersion
+  let props = ghcVersionImplProps ghcVersion
 
   -- This is slightly tricky, we have to configure ghc first, then we use the
   -- location of ghc to help find ghc-pkg in the case that the user did not
@@ -149,10 +151,10 @@ configure verbosity hcPath hcPkgPath conf0 = do
                        }
       conf3 = addKnownProgram hsc2hsProgram' conf2
 
-  languages  <- Common.getLanguages verbosity props ghcProg
-  extensions <- Common.getExtensions verbosity props ghcProg
+  languages  <- Internal.getLanguages verbosity props ghcProg
+  extensions <- Internal.getExtensions verbosity props ghcProg
 
-  ghcInfo <- Common.getGhcInfo verbosity props ghcProg
+  ghcInfo <- Internal.getGhcInfo verbosity props ghcProg
   let ghcInfoMap = M.fromList ghcInfo
 
   let comp = Compiler {
@@ -161,15 +163,15 @@ configure verbosity hcPath hcPkgPath conf0 = do
         compilerExtensions = extensions,
         compilerProperties = ghcInfoMap
       }
-      compPlatform = Common.targetPlatform ghcInfo
-      conf4 = Common.configureToolchain props ghcProg ghcInfoMap conf3 -- configure gcc and ld
+      compPlatform = Internal.targetPlatform ghcInfo
+      conf4 = Internal.configureToolchain props ghcProg ghcInfoMap conf3 -- configure gcc and ld
   return (comp, compPlatform, conf4)
 
 getGhcInfo :: Verbosity -> ConfiguredProgram -> IO [(String, String)]
-getGhcInfo verbosity ghcProg = Common.getGhcInfo verbosity props ghcProg
+getGhcInfo verbosity ghcProg = Internal.getGhcInfo verbosity props ghcProg
   where
     Just version = programVersion ghcProg
-    props = Common.ghcVersionImplProps version
+    props = ghcVersionImplProps version
 
 -- | Given something like /usr/local/bin/ghc-6.6.1(.exe) we try and find
 -- the corresponding tool; e.g. if the tool is ghc-pkg, we try looking
@@ -343,7 +345,8 @@ getInstalledPackages' :: Verbosity -> [PackageDB] -> ProgramConfiguration
 getInstalledPackages' verbosity packagedbs conf
   | ghcVersion >= Version [6,9] [] =
   sequence
-    [ do pkgs <- HcPkg.dump verbosity ghcPkgProg packagedb
+    [ do pkgs <- HcPkg.dump verbosity (ghcVersionImplProps ghcVersion)
+                   ghcPkgProg packagedb
          return (packagedb, pkgs)
     | packagedb <- packagedbs ]
 
@@ -434,7 +437,7 @@ buildOrReplLib forRepl verbosity numJobsFlag pkg_descr lbi lib clbi = do
       ifReplLib = when forRepl
       comp = compiler lbi
       ghcVersion = compilerVersion comp
-      props = Common.ghcVersionImplProps ghcVersion
+      props = getImplProps comp
       (Platform _hostArch hostOS) = hostPlatform lbi
 
   (ghcProg, _) <- requireProgram verbosity ghcProgram (withPrograms lbi)
@@ -466,7 +469,7 @@ buildOrReplLib forRepl verbosity numJobsFlag pkg_descr lbi lib clbi = do
                       ghcOptProfilingMode = toFlag True,
                       ghcOptHiSuffix      = toFlag "p_hi",
                       ghcOptObjSuffix     = toFlag "p_o",
-                      ghcOptExtra         = ghcProfOptions libBi
+                      ghcOptExtra         = hcProfOptions GHC libBi
                     }
 
       sharedOpts  = vanillaOpts `mappend` mempty {
@@ -474,7 +477,7 @@ buildOrReplLib forRepl verbosity numJobsFlag pkg_descr lbi lib clbi = do
                       ghcOptFPic        = toFlag True,
                       ghcOptHiSuffix    = toFlag "dyn_hi",
                       ghcOptObjSuffix   = toFlag "dyn_o",
-                      ghcOptExtra       = ghcSharedOptions libBi
+                      ghcOptExtra       = hcSharedOptions GHC libBi
                     }
       linkerOpts = mempty {
                       ghcOptLinkOptions    = PD.ldOptions libBi,
@@ -484,7 +487,7 @@ buildOrReplLib forRepl verbosity numJobsFlag pkg_descr lbi lib clbi = do
                       ghcOptInputFiles     = [libTargetDir </> x | x <- cObjs]
                    }
       replOpts    = vanillaOpts {
-                      ghcOptExtra        = Common.filterGhciFlags
+                      ghcOptExtra        = Internal.filterGhciFlags
                                            (ghcOptExtra vanillaOpts),
                       ghcOptNumJobs      = mempty
                     }
@@ -506,7 +509,7 @@ buildOrReplLib forRepl verbosity numJobsFlag pkg_descr lbi lib clbi = do
            useDynToo = dynamicTooSupported &&
                        (forceVanillaLib || withVanillaLib lbi) &&
                        (forceSharedLib  || withSharedLib  lbi) &&
-                       null (ghcSharedOptions libBi)
+                       null (hcSharedOptions GHC libBi)
        if useDynToo
            then runGhcProg vanillaSharedOpts
            else if isGhcDynamic then do shared;  vanilla
@@ -517,7 +520,7 @@ buildOrReplLib forRepl verbosity numJobsFlag pkg_descr lbi lib clbi = do
   unless (null (cSources libBi)) $ do
      info verbosity "Building C Sources..."
      sequence_
-       [ do let vanillaCcOpts = (Common.componentCcGhcOptions verbosity props
+       [ do let vanillaCcOpts = (Internal.componentCcGhcOptions verbosity props
                                     lbi libBi clbi libTargetDir filename)
                 profCcOpts    = vanillaCcOpts `mappend` mempty {
                                   ghcOptProfilingMode = toFlag True,
@@ -549,10 +552,10 @@ buildOrReplLib forRepl verbosity numJobsFlag pkg_descr lbi lib clbi = do
       cSharedObjs = map (`replaceExtension` ("dyn_" ++ objExtension))
                     (cSources libBi)
       cid = compilerId (compiler lbi)
-      vanillaLibFilePath = libTargetDir </> mkLibName            libName
-      profileLibFilePath = libTargetDir </> mkProfLibName        libName
-      sharedLibFilePath  = libTargetDir </> mkSharedLibName cid  libName
-      ghciLibFilePath    = libTargetDir </> Common.mkGHCiLibName libName
+      vanillaLibFilePath = libTargetDir </> mkLibName              libName
+      profileLibFilePath = libTargetDir </> mkProfLibName          libName
+      sharedLibFilePath  = libTargetDir </> mkSharedLibName cid    libName
+      ghciLibFilePath    = libTargetDir </> Internal.mkGHCiLibName libName
       libInstallPath = libdir $ absoluteInstallDirs pkg_descr lbi NoCopyDest
       sharedLibInstallPath = libInstallPath </> mkSharedLibName cid libName
 
@@ -572,16 +575,16 @@ buildOrReplLib forRepl verbosity numJobsFlag pkg_descr lbi lib clbi = do
     | ghcVersion < Version [7,2] [] -- ghc-7.2+ does not make _stub.o files
     , x <- libModules lib ]
 
-  hObjs     <- Common.getHaskellObjects props lib lbi
+  hObjs     <- Internal.getHaskellObjects props lib lbi
                     libTargetDir objExtension True
   hProfObjs <-
     if (withProfLib lbi)
-            then Common.getHaskellObjects props lib lbi
+            then Internal.getHaskellObjects props lib lbi
                     libTargetDir ("p_" ++ objExtension) True
             else return []
   hSharedObjs <-
     if (withSharedLib lbi)
-            then Common.getHaskellObjects props lib lbi
+            then Internal.getHaskellObjects props lib lbi
                     libTargetDir ("dyn_" ++ objExtension) False
             else return []
 
@@ -661,7 +664,8 @@ buildExe, replExe :: Verbosity          -> Cabal.Flag (Maybe Int)
 buildExe = buildOrReplExe False
 replExe  = buildOrReplExe True
 
-buildOrReplExe :: Bool -> Verbosity  -> Cabal.Flag (Maybe Int)
+buildOrReplExe :: Bool
+               -> Verbosity          -> Cabal.Flag (Maybe Int)
                -> PackageDescription -> LocalBuildInfo
                -> Executable         -> ComponentLocalBuildInfo -> IO ()
 buildOrReplExe forRepl verbosity numJobsFlag _pkg_descr lbi
@@ -669,7 +673,7 @@ buildOrReplExe forRepl verbosity numJobsFlag _pkg_descr lbi
 
   (ghcProg, _) <- requireProgram verbosity ghcProgram (withPrograms lbi)
   let comp       = compiler lbi
-      props      = Common.ghcVersionImplProps (compilerVersion comp)
+      props      = getImplProps comp
       numJobs    = fromMaybe 1 $
                    fromFlagOrDefault Nothing numJobsFlag
       runGhcProg = runGHC verbosity ghcProg comp
@@ -713,13 +717,13 @@ buildOrReplExe forRepl verbosity numJobsFlag _pkg_descr lbi
                       ghcOptProfilingMode  = toFlag True,
                       ghcOptHiSuffix       = toFlag "p_hi",
                       ghcOptObjSuffix      = toFlag "p_o",
-                      ghcOptExtra          = ghcProfOptions exeBi
+                      ghcOptExtra          = hcProfOptions GHC exeBi
                     }
       dynOpts    = baseOpts `mappend` mempty {
                       ghcOptDynLinkMode    = toFlag GhcDynamicOnly,
                       ghcOptHiSuffix       = toFlag "dyn_hi",
                       ghcOptObjSuffix      = toFlag "dyn_o",
-                      ghcOptExtra          = ghcSharedOptions exeBi
+                      ghcOptExtra          = hcSharedOptions GHC exeBi
                     }
       dynTooOpts = staticOpts `mappend` mempty {
                       ghcOptDynLinkMode    = toFlag GhcStaticAndDynamic,
@@ -734,7 +738,7 @@ buildOrReplExe forRepl verbosity numJobsFlag _pkg_descr lbi
                       ghcOptInputFiles     = [exeDir </> x | x <- cObjs]
                    }
       replOpts   = baseOpts {
-                      ghcOptExtra          = Common.filterGhciFlags
+                      ghcOptExtra          = Internal.filterGhciFlags
                                              (ghcOptExtra baseOpts)
                    }
                    -- For a normal compile we do separate invocations of ghc for
@@ -764,7 +768,8 @@ buildOrReplExe forRepl verbosity numJobsFlag _pkg_descr lbi
       doingTH = EnableExtension TemplateHaskell `elem` allExtensions exeBi
       -- Should we use -dynamic-too instead of compiling twice?
       useDynToo = dynamicTooSupported && isGhcDynamic
-                  && doingTH && withStaticExe && null (ghcSharedOptions exeBi)
+                  && doingTH && withStaticExe
+                  && null (hcSharedOptions GHC exeBi)
       compileTHOpts | isGhcDynamic = dynOpts
                     | otherwise    = staticOpts
       compileForTH
@@ -791,7 +796,7 @@ buildOrReplExe forRepl verbosity numJobsFlag _pkg_descr lbi
   unless (null cSrcs) $ do
    info verbosity "Building C Sources..."
    sequence_
-     [ do let opts = (Common.componentCcGhcOptions verbosity props lbi exeBi
+     [ do let opts = (Internal.componentCcGhcOptions verbosity props lbi exeBi
                          clbi exeDir filename) `mappend` mempty {
                        ghcOptDynLinkMode   = toFlag (if withDynExe lbi
                                                        then GhcDynamicOnly
@@ -840,6 +845,7 @@ libAbiHash verbosity pkg_descr lbi lib clbi = do
              (compiler lbi) (withProfLib lbi) (libBuildInfo lib)
   let
       comp        = compiler lbi
+      props       = getImplProps comp
       vanillaArgs =
         (componentGhcOptions verbosity lbi libBi clbi (buildDir lbi))
         `mappend` mempty {
@@ -852,13 +858,13 @@ libAbiHash verbosity pkg_descr lbi lib clbi = do
                        ghcOptFPic        = toFlag True,
                        ghcOptHiSuffix    = toFlag "dyn_hi",
                        ghcOptObjSuffix   = toFlag "dyn_o",
-                       ghcOptExtra       = ghcSharedOptions libBi
+                       ghcOptExtra       = hcSharedOptions GHC libBi
                    }
       profArgs = vanillaArgs `mappend` mempty {
                      ghcOptProfilingMode = toFlag True,
                      ghcOptHiSuffix      = toFlag "p_hi",
                      ghcOptObjSuffix     = toFlag "p_o",
-                     ghcOptExtra         = ghcProfOptions libBi
+                     ghcOptExtra         = hcProfOptions GHC libBi
                  }
       ghcArgs = if withVanillaLib lbi then vanillaArgs
            else if withSharedLib  lbi then sharedArgs
@@ -871,7 +877,7 @@ libAbiHash verbosity pkg_descr lbi lib clbi = do
 componentGhcOptions :: Verbosity -> LocalBuildInfo
                     -> BuildInfo -> ComponentLocalBuildInfo -> FilePath
                     -> GhcOptions
-componentGhcOptions = Common.componentGhcOptions
+componentGhcOptions = Internal.componentGhcOptions
 
 -- -----------------------------------------------------------------------------
 -- Installing
@@ -942,10 +948,10 @@ installLib verbosity lbi targetDir dynlibTargetDir builtDir _pkg lib clbi = do
 
     cid = compilerId (compiler lbi)
     libNames = componentLibraries clbi
-    vanillaLibNames = map mkLibName             libNames
-    profileLibNames = map mkProfLibName         libNames
-    ghciLibNames    = map Common.mkGHCiLibName  libNames
-    sharedLibNames  = map (mkSharedLibName cid) libNames
+    vanillaLibNames = map mkLibName              libNames
+    profileLibNames = map mkProfLibName          libNames
+    ghciLibNames    = map Internal.mkGHCiLibName libNames
+    sharedLibNames  = map (mkSharedLibName cid)  libNames
 
     hasLib    = not $ null (libModules lib)
                    && null (cSources (libBuildInfo lib))
@@ -959,18 +965,22 @@ installLib verbosity lbi targetDir dynlibTargetDir builtDir _pkg lib clbi = do
 
 -- | Create an empty package DB at the specified location.
 initPackageDB :: Verbosity -> ProgramConfiguration -> FilePath -> IO ()
-initPackageDB verbosity conf dbPath = HcPkg.init verbosity ghcPkgProg dbPath
-  where
-    Just ghcPkgProg = lookupProgram ghcPkgProgram conf
+initPackageDB verbosity conf dbPath =
+  HcPkg.init verbosity (ghcVersionImplProps ver) ghcPkgProg dbPath
+    where
+      Just ghcPkgProg = lookupProgram ghcPkgProgram conf
+      Just ver        = programVersion ghcPkgProg
 
 -- | Run 'ghc-pkg' using a given package DB stack, directly forwarding the
 -- provided command-line arguments to it.
 invokeHcPkg :: Verbosity -> ProgramConfiguration -> PackageDBStack -> [String]
-               -> IO ()
+            -> IO ()
 invokeHcPkg verbosity conf dbStack extraArgs =
-    HcPkg.invoke verbosity ghcPkgProg dbStack extraArgs
+    HcPkg.invoke verbosity (ghcVersionImplProps ver) ghcPkgProg
+      dbStack extraArgs
   where
     Just ghcPkgProg = lookupProgram ghcPkgProgram conf
+    Just ver        = programVersion ghcPkgProg
 
 registerPackage
   :: Verbosity
@@ -982,13 +992,16 @@ registerPackage
   -> IO ()
 registerPackage verbosity installedPkgInfo _pkg lbi _inplace packageDbs = do
   let Just ghcPkg = lookupProgram ghcPkgProgram (withPrograms lbi)
-  HcPkg.reregister verbosity ghcPkg packageDbs (Right installedPkgInfo)
+      Just ver    = programVersion ghcPkg
+  HcPkg.reregister verbosity (ghcVersionImplProps ver) ghcPkg
+    packageDbs (Right installedPkgInfo)
 
 -- -----------------------------------------------------------------------------
 -- Utils
 
 ghcDynamic :: Compiler -> Bool
-ghcDynamic = Common.ghcLookupProperty "GHC Dynamic"
+ghcDynamic = Internal.ghcLookupProperty "GHC Dynamic"
 
 ghcSupportsDynamicToo :: Compiler -> Bool
-ghcSupportsDynamicToo = Common.ghcLookupProperty "Support dynamic-too"
+ghcSupportsDynamicToo = Internal.ghcLookupProperty "Support dynamic-too"
+

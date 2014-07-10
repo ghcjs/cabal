@@ -223,9 +223,10 @@ library
     Distribution.Compat.CopyFile
     Distribution.Compat.TempFile
     Distribution.GetOpt
-    Distribution.Simple.GHC.Common
+    Distribution.Simple.GHC.Internal
     Distribution.Simple.GHC.IPI641
     Distribution.Simple.GHC.IPI642
+    Distribution.Simple.GHC.Props
     Paths_Cabal
 
   default-language: Haskell98

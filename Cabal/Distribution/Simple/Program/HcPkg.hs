@@ -7,7 +7,7 @@
 -- Portability :  portable
 --
 -- This module provides an library interface to the @hc-pkg@ program.
--- Currently only GHC and LHC have hc-pkg programs.
+-- Currently only GHC, GHCJS and LHC have hc-pkg programs.
 
 module Distribution.Simple.Program.HcPkg (
     init,
@@ -32,6 +32,7 @@ module Distribution.Simple.Program.HcPkg (
   ) where
 
 import Prelude hiding (init)
+import Distribution.Simple.GHC.Props ( ImplProps (..) )
 import Distribution.Package
          ( PackageId, InstalledPackageId(..) )
 import Distribution.InstalledPackageInfo
@@ -42,7 +43,7 @@ import Distribution.ParseUtils
 import Distribution.Simple.Compiler
          ( PackageDB(..), PackageDBStack )
 import Distribution.Simple.Program.Types
-         ( ConfiguredProgram(programId, programVersion) )
+         ( ConfiguredProgram(programId) )
 import Distribution.Simple.Program.Run
          ( ProgramInvocation(..), IOEncoding(..), programInvocation
          , runProgramInvocation, getProgramInvocationOutput )
@@ -72,84 +73,88 @@ import qualified System.FilePath.Posix as FilePath.Posix
 --
 -- > hc-pkg init {path}
 --
-init :: Verbosity -> ConfiguredProgram -> FilePath -> IO ()
-init verbosity hcPkg path =
+init :: Verbosity -> ImplProps -> ConfiguredProgram -> FilePath -> IO ()
+init verbosity props hcPkg path =
   runProgramInvocation verbosity
-    (initInvocation hcPkg verbosity path)
+    (initInvocation props hcPkg verbosity path)
 
 -- | Run @hc-pkg@ using a given package DB stack, directly forwarding the
 -- provided command-line arguments to it.
-invoke :: Verbosity -> ConfiguredProgram -> PackageDBStack -> [String] -> IO ()
-invoke verbosity hcPkg dbStack extraArgs =
+invoke :: Verbosity -> ImplProps -> ConfiguredProgram
+       -> PackageDBStack -> [String] -> IO ()
+invoke verbosity props hcPkg dbStack extraArgs =
   runProgramInvocation verbosity invocation
   where
-    args       = packageDbStackOpts hcPkg dbStack ++ extraArgs
+    args       = packageDbStackOpts props dbStack ++ extraArgs
     invocation = programInvocation hcPkg args
 
 -- | Call @hc-pkg@ to register a package.
 --
 -- > hc-pkg register {filename | -} [--user | --global | --package-db]
 --
-register :: Verbosity -> ConfiguredProgram -> PackageDBStack
+register :: Verbosity -> ImplProps
+         -> ConfiguredProgram -> PackageDBStack
          -> Either FilePath
                    InstalledPackageInfo
          -> IO ()
-register verbosity hcPkg packagedb pkgFile =
+register verbosity props hcPkg packagedb pkgFile =
   runProgramInvocation verbosity
-    (registerInvocation hcPkg verbosity packagedb pkgFile)
+    (registerInvocation props hcPkg verbosity packagedb pkgFile)
 
 
 -- | Call @hc-pkg@ to re-register a package.
 --
 -- > hc-pkg register {filename | -} [--user | --global | --package-db]
 --
-reregister :: Verbosity -> ConfiguredProgram -> PackageDBStack
+reregister :: Verbosity -> ImplProps
+           -> ConfiguredProgram -> PackageDBStack
            -> Either FilePath
                      InstalledPackageInfo
            -> IO ()
-reregister verbosity hcPkg packagedb pkgFile =
+reregister verbosity props hcPkg packagedb pkgFile =
   runProgramInvocation verbosity
-    (reregisterInvocation hcPkg verbosity packagedb pkgFile)
+    (reregisterInvocation props hcPkg verbosity packagedb pkgFile)
 
 
 -- | Call @hc-pkg@ to unregister a package
 --
 -- > hc-pkg unregister [pkgid] [--user | --global | --package-db]
 --
-unregister :: Verbosity -> ConfiguredProgram -> PackageDB -> PackageId -> IO ()
-unregister verbosity hcPkg packagedb pkgid =
+unregister :: Verbosity -> ImplProps -> ConfiguredProgram -> PackageDB -> PackageId -> IO ()
+unregister verbosity props hcPkg packagedb pkgid =
   runProgramInvocation verbosity
-    (unregisterInvocation hcPkg verbosity packagedb pkgid)
+    (unregisterInvocation props hcPkg verbosity packagedb pkgid)
 
 
 -- | Call @hc-pkg@ to expose a package.
 --
 -- > hc-pkg expose [pkgid] [--user | --global | --package-db]
 --
-expose :: Verbosity -> ConfiguredProgram -> PackageDB -> PackageId -> IO ()
-expose verbosity hcPkg packagedb pkgid =
+expose :: Verbosity -> ImplProps -> ConfiguredProgram -> PackageDB -> PackageId -> IO ()
+expose verbosity props hcPkg packagedb pkgid =
   runProgramInvocation verbosity
-    (exposeInvocation hcPkg verbosity packagedb pkgid)
+    (exposeInvocation props hcPkg verbosity packagedb pkgid)
 
 
 -- | Call @hc-pkg@ to hide a package.
 --
 -- > hc-pkg hide [pkgid] [--user | --global | --package-db]
 --
-hide :: Verbosity -> ConfiguredProgram -> PackageDB -> PackageId -> IO ()
-hide verbosity hcPkg packagedb pkgid =
+hide :: Verbosity -> ImplProps -> ConfiguredProgram -> PackageDB -> PackageId -> IO ()
+hide verbosity props hcPkg packagedb pkgid =
   runProgramInvocation verbosity
-    (hideInvocation hcPkg verbosity packagedb pkgid)
+    (hideInvocation props hcPkg verbosity packagedb pkgid)
 
 
 -- | Call @hc-pkg@ to get all the details of all the packages in the given
 -- package database.
 --
-dump :: Verbosity -> ConfiguredProgram -> PackageDB -> IO [InstalledPackageInfo]
-dump verbosity hcPkg packagedb = do
+dump :: Verbosity -> ImplProps -> ConfiguredProgram -> PackageDB
+     -> IO [InstalledPackageInfo]
+dump verbosity props hcPkg packagedb = do
 
   output <- getProgramInvocationOutput verbosity
-              (dumpInvocation hcPkg verbosity packagedb)
+              (dumpInvocation props hcPkg verbosity packagedb)
     `catchExit` \_ -> die $ programId hcPkg ++ " dump failed"
 
   case parsePackages output of
@@ -256,11 +261,12 @@ setInstalledPackageId pkginfo = pkginfo
 -- Note in particular that it does not include the 'InstalledPackageId', just
 -- the source 'PackageId' which is not necessarily unique in any package db.
 --
-list :: Verbosity -> ConfiguredProgram -> PackageDB -> IO [PackageId]
-list verbosity hcPkg packagedb = do
+list :: Verbosity -> ImplProps -> ConfiguredProgram -> PackageDB
+     -> IO [PackageId]
+list verbosity props hcPkg packagedb = do
 
   output <- getProgramInvocationOutput verbosity
-              (listInvocation hcPkg verbosity packagedb)
+              (listInvocation props hcPkg verbosity packagedb)
     `catchExit` \_ -> die $ programId hcPkg ++ " list failed"
 
   case parsePackageIds output of
@@ -280,16 +286,16 @@ list verbosity hcPkg packagedb = do
 -- The program invocations
 --
 
-initInvocation :: ConfiguredProgram
+initInvocation :: ImplProps -> ConfiguredProgram
                -> Verbosity -> FilePath -> ProgramInvocation
-initInvocation hcPkg verbosity path =
+initInvocation props hcPkg verbosity path =
     programInvocation hcPkg args
   where
     args = ["init", path]
-        ++ verbosityOpts hcPkg verbosity
+        ++ verbosityOpts props verbosity
 
 registerInvocation, reregisterInvocation
-  :: ConfiguredProgram -> Verbosity -> PackageDBStack
+  :: ImplProps -> ConfiguredProgram -> Verbosity -> PackageDBStack
   -> Either FilePath InstalledPackageInfo
   -> ProgramInvocation
 registerInvocation   = registerInvocation' "register"
@@ -297,121 +303,117 @@ reregisterInvocation = registerInvocation' "update"
 
 
 registerInvocation' :: String
-                    -> ConfiguredProgram -> Verbosity -> PackageDBStack
+                    -> ImplProps -> ConfiguredProgram -> Verbosity
+                    -> PackageDBStack
                     -> Either FilePath InstalledPackageInfo
                     -> ProgramInvocation
-registerInvocation' cmdname hcPkg verbosity packagedbs (Left pkgFile) =
+registerInvocation' cmdname props hcPkg verbosity packagedbs (Left pkgFile) =
     programInvocation hcPkg args
   where
     args = [cmdname, pkgFile]
-        ++ (if legacyVersion hcPkg
-              then [packageDbOpts hcPkg (last packagedbs)]
-              else packageDbStackOpts hcPkg packagedbs)
-        ++ verbosityOpts hcPkg verbosity
+        ++ (if noPkgDbStack props
+              then [packageDbOpts props (last packagedbs)]
+              else packageDbStackOpts props packagedbs)
+        ++ verbosityOpts props verbosity
 
-registerInvocation' cmdname hcPkg verbosity packagedbs (Right pkgInfo) =
+registerInvocation' cmdname props hcPkg verbosity packagedbs (Right pkgInfo) =
     (programInvocation hcPkg args) {
       progInvokeInput         = Just (showInstalledPackageInfo pkgInfo),
       progInvokeInputEncoding = IOEncodingUTF8
     }
   where
     args = [cmdname, "-"]
-        ++ (if legacyVersion hcPkg
-              then [packageDbOpts hcPkg (last packagedbs)]
-              else packageDbStackOpts hcPkg packagedbs)
-        ++ verbosityOpts hcPkg verbosity
+        ++ (if noPkgDbStack props
+              then [packageDbOpts props (last packagedbs)]
+              else packageDbStackOpts props packagedbs)
+        ++ verbosityOpts props verbosity
 
 
-unregisterInvocation :: ConfiguredProgram
+unregisterInvocation :: ImplProps -> ConfiguredProgram
                      -> Verbosity -> PackageDB -> PackageId
                      -> ProgramInvocation
-unregisterInvocation hcPkg verbosity packagedb pkgid =
+unregisterInvocation props hcPkg verbosity packagedb pkgid =
   programInvocation hcPkg $
-       ["unregister", packageDbOpts hcPkg packagedb, display pkgid]
-    ++ verbosityOpts hcPkg verbosity
+       ["unregister", packageDbOpts props packagedb, display pkgid]
+    ++ verbosityOpts props verbosity
 
 
-exposeInvocation :: ConfiguredProgram
+exposeInvocation :: ImplProps -> ConfiguredProgram
                  -> Verbosity -> PackageDB -> PackageId -> ProgramInvocation
-exposeInvocation hcPkg verbosity packagedb pkgid =
+exposeInvocation props hcPkg verbosity packagedb pkgid =
   programInvocation hcPkg $
-       ["expose", packageDbOpts hcPkg packagedb, display pkgid]
-    ++ verbosityOpts hcPkg verbosity
+       ["expose", packageDbOpts props packagedb, display pkgid]
+    ++ verbosityOpts props verbosity
 
 
-hideInvocation :: ConfiguredProgram
+hideInvocation :: ImplProps -> ConfiguredProgram
                -> Verbosity -> PackageDB -> PackageId -> ProgramInvocation
-hideInvocation hcPkg verbosity packagedb pkgid =
+hideInvocation props hcPkg verbosity packagedb pkgid =
   programInvocation hcPkg $
-       ["hide", packageDbOpts hcPkg packagedb, display pkgid]
-    ++ verbosityOpts hcPkg verbosity
+       ["hide", packageDbOpts props packagedb, display pkgid]
+    ++ verbosityOpts props verbosity
 
 
-dumpInvocation :: ConfiguredProgram
+dumpInvocation :: ImplProps -> ConfiguredProgram
                -> Verbosity -> PackageDB -> ProgramInvocation
-dumpInvocation hcPkg _verbosity packagedb =
+dumpInvocation props hcPkg _verbosity packagedb =
     (programInvocation hcPkg args) {
       progInvokeOutputEncoding = IOEncodingUTF8
     }
   where
-    args = ["dump", packageDbOpts hcPkg packagedb]
-        ++ verbosityOpts hcPkg silent
+    args = ["dump", packageDbOpts props packagedb]
+        ++ verbosityOpts props silent
            -- We use verbosity level 'silent' because it is important that we
            -- do not contaminate the output with info/debug messages.
 
-listInvocation :: ConfiguredProgram
+listInvocation :: ImplProps -> ConfiguredProgram
                -> Verbosity -> PackageDB -> ProgramInvocation
-listInvocation hcPkg _verbosity packagedb =
+listInvocation props hcPkg _verbosity packagedb =
     (programInvocation hcPkg args) {
       progInvokeOutputEncoding = IOEncodingUTF8
     }
   where
-    args = ["list", "--simple-output", packageDbOpts hcPkg packagedb]
-        ++ verbosityOpts hcPkg silent
+    args = ["list", "--simple-output", packageDbOpts props packagedb]
+        ++ verbosityOpts props silent
            -- We use verbosity level 'silent' because it is important that we
            -- do not contaminate the output with info/debug messages.
 
 
-packageDbStackOpts :: ConfiguredProgram -> PackageDBStack -> [String]
-packageDbStackOpts hcPkg dbstack = case dbstack of
+packageDbStackOpts :: ImplProps -> PackageDBStack -> [String]
+packageDbStackOpts props dbstack = case dbstack of
   (GlobalPackageDB:UserPackageDB:dbs) -> "--global"
                                        : "--user"
                                        : map specific dbs
   (GlobalPackageDB:dbs)               -> "--global"
-                                       : ("--no-user-" ++ packageDbFlag hcPkg)
+                                       : ("--no-user-" ++ packageDbFlag props)
                                        : map specific dbs
   _                                   -> ierror
   where
-    specific (SpecificPackageDB db) = "--" ++ packageDbFlag hcPkg ++ "=" ++ db
+    specific (SpecificPackageDB db) = "--" ++ packageDbFlag props ++ "=" ++ db
     specific _ = ierror
     ierror :: a
     ierror     = error ("internal error: unexpected package db stack: " ++ show dbstack)
 
-packageDbFlag :: ConfiguredProgram -> String
-packageDbFlag hcPkg
-  | programVersion hcPkg < Just (Version [7,5] []) && programId hcPkg == "ghc-pkg"
+packageDbFlag :: ImplProps -> String
+packageDbFlag props
+  | flagPackageConf props
   = "package-conf"
   | otherwise
   = "package-db"
 
-packageDbOpts :: ConfiguredProgram -> PackageDB -> String
+packageDbOpts :: ImplProps -> PackageDB -> String
 packageDbOpts _ GlobalPackageDB        = "--global"
 packageDbOpts _ UserPackageDB          = "--user"
-packageDbOpts hcPkg (SpecificPackageDB db) = "--" ++ packageDbFlag hcPkg ++ "=" ++ db
+packageDbOpts props (SpecificPackageDB db) = "--" ++ packageDbFlag props ++ "=" ++ db
 
-verbosityOpts :: ConfiguredProgram -> Verbosity -> [String]
-verbosityOpts hcPkg v
+verbosityOpts :: ImplProps -> Verbosity -> [String]
+verbosityOpts props v
 
   -- ghc-pkg < 6.11 does not support -v
-  | programId hcPkg == "ghc-pkg"
- && programVersion hcPkg < Just (Version [6,11] [])
+  | flagPkgNoVerbose props
                    = []
 
   | v >= deafening = ["-v2"]
   | v == silent    = ["-v0"]
   | otherwise      = []
 
--- Handle quirks in ghc-pkg 6.8 and older
-legacyVersion :: ConfiguredProgram -> Bool
-legacyVersion hcPkg = programId hcPkg == "ghc-pkg"
-                   && programVersion hcPkg < Just (Version [6,9] [])

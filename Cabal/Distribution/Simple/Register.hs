@@ -50,6 +50,8 @@ import qualified Distribution.Simple.Hugs  as Hugs
 import qualified Distribution.Simple.UHC   as UHC
 import qualified Distribution.Simple.HaskellSuite as HaskellSuite
 
+import Distribution.Simple.GHC.Props ( getImplProps )
+
 import Distribution.Simple.Compiler
          ( compilerVersion, Compiler, CompilerFlavor(..), compilerFlavor
          , PackageDBStack, registrationPackageDB )
@@ -136,11 +138,14 @@ register pkg@PackageDescription { library       = Just lib  } lbi regFlags
     writeRegisterScript installedPkgInfo =
       case compilerFlavor (compiler lbi) of
         GHC   -> do (ghcPkg, _) <- requireProgram verbosity ghcPkgProgram (withPrograms lbi)
-                    writeHcPkgRegisterScript verbosity installedPkgInfo ghcPkg packageDbs
+                    writeHcPkgRegisterScript verbosity (compiler lbi)
+                      installedPkgInfo ghcPkg packageDbs
         GHCJS -> do (ghcjsPkg, _) <- requireProgram verbosity ghcjsPkgProgram (withPrograms lbi)
-                    writeHcPkgRegisterScript verbosity installedPkgInfo ghcjsPkg packageDbs
+                    writeHcPkgRegisterScript verbosity (compiler lbi)
+                      installedPkgInfo ghcjsPkg packageDbs
         LHC   -> do (lhcPkg, _) <- requireProgram verbosity lhcPkgProgram (withPrograms lbi)
-                    writeHcPkgRegisterScript verbosity installedPkgInfo lhcPkg packageDbs
+                    writeHcPkgRegisterScript verbosity (compiler lbi)
+                      installedPkgInfo lhcPkg packageDbs
         Hugs  -> notice verbosity "Registration scripts not needed for hugs"
         JHC   -> notice verbosity "Registration scripts not needed for jhc"
         NHC   -> notice verbosity "Registration scripts not needed for nhc98"
@@ -234,12 +239,13 @@ registerPackage verbosity installedPkgInfo pkg lbi inplace packageDbs = do
     _    -> die "Registering is not implemented for this compiler"
 
 writeHcPkgRegisterScript :: Verbosity
+                         -> Compiler
                          -> InstalledPackageInfo
                          -> ConfiguredProgram
                          -> PackageDBStack
                          -> IO ()
-writeHcPkgRegisterScript verbosity installedPkgInfo hcPkg packageDbs = do
-  let invocation  = HcPkg.reregisterInvocation hcPkg Verbosity.normal
+writeHcPkgRegisterScript verbosity comp installedPkgInfo hcPkg packageDbs = do
+  let invocation  = HcPkg.reregisterInvocation (getImplProps comp) hcPkg Verbosity.normal
                       packageDbs (Right installedPkgInfo)
       regScript   = invocationAsSystemScript buildOS   invocation
 
@@ -314,6 +320,7 @@ generalInstalledPackageInfo adjustRelIncDirs pkg lib clbi installDirs =
     hasModules = not $ null (exposedModules lib)
                     && null (otherModules bi)
     hasLibrary = hasModules || not (null (cSources bi))
+                            || not (null (jsSources bi))
 
 
 -- | Construct 'InstalledPackageInfo' for a library that is in place in the
@@ -382,16 +389,16 @@ unregister pkg lbi regFlags = do
   case compilerFlavor (compiler lbi) of
     GHC ->
       let Just ghcPkg = lookupProgram ghcPkgProgram (withPrograms lbi)
-          invocation = HcPkg.unregisterInvocation ghcPkg Verbosity.normal
-                         packageDb pkgid
+          invocation = HcPkg.unregisterInvocation (getImplProps $ compiler lbi)
+                         ghcPkg Verbosity.normal packageDb pkgid
       in if genScript
            then writeFileAtomic unregScriptFileName
                   (BS.Char8.pack $ invocationAsSystemScript buildOS invocation)
             else runProgramInvocation verbosity invocation
     GHCJS ->
       let Just ghcjsPkg = lookupProgram ghcjsPkgProgram (withPrograms lbi)
-          invocation = HcPkg.unregisterInvocation ghcjsPkg Verbosity.normal
-                         packageDb pkgid
+          invocation = HcPkg.unregisterInvocation (getImplProps $ compiler lbi)
+                         ghcjsPkg Verbosity.normal packageDb pkgid
       in if genScript
            then writeFileAtomic unregScriptFileName
                   (BS.Char8.pack $ invocationAsSystemScript buildOS invocation)

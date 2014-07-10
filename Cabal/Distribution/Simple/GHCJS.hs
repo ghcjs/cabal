@@ -12,82 +12,77 @@ module Distribution.Simple.GHCJS (
         invokeHcPkg
   ) where
 
-import Control.Monad (when)
-import Distribution.PackageDescription as PD
-         ( PackageDescription, BuildInfo(..), Executable(..)
-         , Library(..), libModules )
-import Distribution.InstalledPackageInfo
-         ( InstalledPackageInfo )
-import Distribution.Simple.Compiler
-import Distribution.Simple.LocalBuildInfo
-         ( LocalBuildInfo(..), ComponentLocalBuildInfo(..) )
-import Distribution.Simple.InstallDirs hiding ( absoluteInstallDirs )
-import Distribution.Simple.PackageIndex (PackageIndex)
-import Distribution.Simple.Program
-         ( Program(..), ConfiguredProgram(..), ProgramConfiguration
-         , ProgramSearchPath, rawSystemProgramConf
-         , rawSystemProgramStdoutConf, rawSystemProgramStdout
-         , requireProgramVersion, getProgramInvocationOutput
-         , userMaybeSpecifyPath, programPath
-         , addKnownPrograms, updateProgram, lookupProgram
-         , ghcjsProgram, ghcjsPkgProgram, hsc2hsProgram
-         , c2hsProgram, stripProgram, requireProgram
-         , ldProgram
-         )
+import Distribution.Simple.GHC.Props ( getImplProps, ghcjsVersionImplProps )
+import qualified Distribution.Simple.GHC.Internal as Internal
+import qualified Distribution.Simple.GHC.IPI641 as IPI641
+import qualified Distribution.Simple.GHC.IPI642 as IPI642
 import Distribution.PackageDescription as PD
          ( PackageDescription(..), BuildInfo(..), Executable(..)
-         , Library(..), libModules, exeModules, hcOptions
+         , Library(..), libModules, exeModules
+         , hcOptions, hcProfOptions, hcSharedOptions
          , usedExtensions, allExtensions )
-import qualified Distribution.Simple.Program.HcPkg as HcPkg
--- import Distribution.Simple.Program.GHC ( GhcOptions )
-import Distribution.Simple.Program.GHC
-import qualified Distribution.Simple.Setup as Cabal
-        ( Flag )
-import Distribution.Text ( display )
-import Language.Haskell.Extension ( Language(..), Extension(..) )
-import Distribution.Verbosity
-import Distribution.Version
-         ( Version(..), anyVersion, orLaterVersion )
-import Distribution.Simple.Program.Builtin ( haddockProgram )
-import Distribution.Simple.BuildPaths
-import Distribution.Simple.Utils
-import Distribution.System ( Platform )
-import System.Directory ( doesFileExist )
-import System.FilePath  ( (</>), (<.>), takeDirectory, splitExtension )
-import qualified Data.Map as M
-import System.IO.Error ( catchIOError )
-import qualified Control.Exception as E
-import Distribution.Simple.GHC.Common (ImplProps(..))
-import qualified Distribution.Simple.GHC.Common as Common
-import Distribution.Simple.Setup
-         ( toFlag, fromFlag, fromFlagOrDefault )
-import Data.Monoid
-import Distribution.Package
-import Data.Maybe
-import Data.List (nub)
-import Control.Monad (unless)
-import Language.Haskell.Extension
-import System.FilePath          ( (</>), (<.>), takeExtension,
-                                  takeDirectory, replaceExtension,
-                                  splitExtension )
-import qualified Distribution.ModuleName as ModuleName
-import qualified Distribution.Simple.Program.Ar    as Ar
-import qualified Distribution.Simple.Program.Ld    as Ld
-import qualified Distribution.Simple.Program.Strip as Strip
-import System.Directory
-         ( getDirectoryContents, doesFileExist, getTemporaryDirectory )
-import Distribution.Simple.LocalBuildInfo
-         ( LocalBuildInfo(..), ComponentLocalBuildInfo(..)
-         , LibraryName(..), absoluteInstallDirs )
-import Distribution.System
-         ( Platform(..), OS(..), buildOS, platformFromTriple )
-import Data.Char (isSpace)
-import Distribution.Simple.PackageIndex (PackageIndex)
-import qualified Distribution.Simple.PackageIndex as PackageIndex
 import Distribution.InstalledPackageInfo
          ( InstalledPackageInfo )
 import qualified Distribution.InstalledPackageInfo as InstalledPackageInfo
                                 ( InstalledPackageInfo_(..) )
+import Distribution.Simple.PackageIndex (PackageIndex)
+import qualified Distribution.Simple.PackageIndex as PackageIndex
+import Distribution.Simple.LocalBuildInfo
+         ( LocalBuildInfo(..), ComponentLocalBuildInfo(..)
+         , LibraryName(..), absoluteInstallDirs )
+import Distribution.Simple.InstallDirs hiding ( absoluteInstallDirs )
+import Distribution.Simple.BuildPaths
+import Distribution.Simple.Utils
+import Distribution.Package
+         ( Package(..), PackageName(..) )
+import qualified Distribution.ModuleName as ModuleName
+import Distribution.Simple.Program
+         ( Program(..), ConfiguredProgram(..), ProgramConfiguration
+         , ProgramSearchPath
+         , rawSystemProgram, rawSystemProgramConf
+         , rawSystemProgramStdout, rawSystemProgramStdoutConf
+         , getProgramInvocationOutput, suppressOverrideArgs
+         , requireProgramVersion, requireProgram
+         , userMaybeSpecifyPath, programPath
+         , lookupProgram, addKnownProgram, addKnownPrograms
+         , ghcjsProgram, ghcjsPkgProgram, c2hsProgram, hsc2hsProgram
+         , arProgram, ldProgram, haddockProgram
+         , gccProgram, stripProgram )
+import qualified Distribution.Simple.Program.HcPkg as HcPkg
+import qualified Distribution.Simple.Program.Ar    as Ar
+import qualified Distribution.Simple.Program.Ld    as Ld
+import qualified Distribution.Simple.Program.Strip as Strip
+import Distribution.Simple.Program.GHC
+import Distribution.Simple.Setup
+         ( toFlag, fromFlag, fromFlagOrDefault )
+import qualified Distribution.Simple.Setup as Cabal
+        ( Flag )
+import Distribution.Simple.Compiler
+         ( CompilerFlavor(..), CompilerId(..), Compiler(..), compilerVersion
+         , OptimisationLevel(..), PackageDB(..), PackageDBStack )
+import Distribution.Version
+         ( Version(..), anyVersion, orLaterVersion )
+import Distribution.System
+         ( Platform(..), OS(..), buildOS, platformFromTriple )
+import Distribution.Verbosity
+import Distribution.Text ( display )
+import Language.Haskell.Extension (Language(..), Extension(..)
+                                  ,KnownExtension(..))
+
+import Control.Monad            ( unless, when )
+import Data.Char                ( isSpace )
+import Data.List
+import qualified Data.Map as M  ( Map, fromList, lookup )
+import Data.Maybe               ( catMaybes, fromMaybe, maybeToList )
+import Data.Monoid              ( Monoid(..) )
+import System.Directory
+         ( getDirectoryContents, doesFileExist, doesDirectoryExist
+         , getTemporaryDirectory )
+import System.FilePath          ( (</>), (<.>), takeExtension,
+                                  takeDirectory, replaceExtension,
+                                  splitExtension )
+import System.Environment (getEnv)
+import Distribution.Compat.Exception (catchExit, catchIO)
 
 configure :: Verbosity -> Maybe FilePath -> Maybe FilePath
           -> ProgramConfiguration
@@ -98,7 +93,7 @@ configure verbosity hcPath hcPkgPath conf0 = do
       (orLaterVersion (Version [0,1] []))
       (userMaybeSpecifyPath "ghcjs" hcPath conf0)
   Just ghcjsGhcVersion <- findGhcjsGhcVersion verbosity (programPath ghcjsProg)
-  let props = ghcjsVersionImplProps ghcjsVersion
+  let props = ghcjsVersionImplProps ghcjsVersion ghcjsGhcVersion
 
   -- This is slightly tricky, we have to configure ghcjs first, then we use the
   -- location of ghcjs to help find ghcjs-pkg in the case that the user did not
@@ -137,10 +132,10 @@ configure verbosity hcPath hcPkgPath conf0 = do
                           guessHaddockFromGhcjsPath ghcjsProg }
       conf3 = addKnownPrograms [ hsc2hsProgram', c2hsProgram', haddockProgram' ] conf2
 
-  languages  <- Common.getLanguages  verbosity props ghcjsProg
-  extensions <- Common.getExtensions verbosity props ghcjsProg
+  languages  <- Internal.getLanguages  verbosity props ghcjsProg
+  extensions <- Internal.getExtensions verbosity props ghcjsProg
 
-  ghcInfo <- Common.getGhcInfo verbosity props ghcjsProg
+  ghcInfo <- Internal.getGhcInfo verbosity props ghcjsProg
   let ghcInfoMap = M.fromList ghcInfo
 
   let comp = Compiler {
@@ -150,16 +145,16 @@ configure verbosity hcPath hcPkgPath conf0 = do
         compilerExtensions = extensions,
         compilerProperties = ghcInfoMap
       }
-      compPlatform = Common.targetPlatform ghcInfo
+      compPlatform = Internal.targetPlatform ghcInfo
   -- configure gcc and ld
   let conf4 = if ghcjsNativeToo comp
-                     then Common.configureToolchain props
+                     then Internal.configureToolchain props
                             ghcjsProg ghcInfoMap conf3
                      else conf3
   return (comp, compPlatform, conf4)
 
 ghcjsNativeToo :: Compiler -> Bool
-ghcjsNativeToo =  Common.ghcLookupProperty "Native Too"
+ghcjsNativeToo = Internal.ghcLookupProperty "Native Too"
 
 {-
 getLanguages :: Verbosity -> ConfiguredProgram -> IO [(Language, Flag)]
@@ -293,16 +288,17 @@ checkPackageDbStack _ =
 
 getInstalledPackages' :: Verbosity -> [PackageDB] -> ProgramConfiguration
                       -> IO [(PackageDB, [InstalledPackageInfo])]
-getInstalledPackages' verbosity packagedbs conf =
+getInstalledPackages' verbosity packagedbs conf = do
+  Just ghcVersion <- findGhcjsPkgGhcVersion verbosity (programPath ghcjsPkgProg)
   sequence
-    [ do pkgs <- HcPkg.dump verbosity ghcjsPkgProg packagedb
+    [ do pkgs <- HcPkg.dump verbosity (ghcjsVersionImplProps ghcjsVersion ghcVersion)
+                   ghcjsPkgProg packagedb
          return (packagedb, pkgs)
     | packagedb <- packagedbs ]
   where
     Just ghcjsPkgProg = lookupProgram  ghcjsPkgProgram conf
     Just ghcjsProg    = lookupProgram  ghcjsProgram conf
     Just ghcjsVersion = programVersion ghcjsProg
-
 
 ghcjsLibDir :: Verbosity -> LocalBuildInfo -> IO FilePath
 ghcjsLibDir verbosity lbi =
@@ -315,13 +311,9 @@ ghcjsLibDir' verbosity ghcjsProg =
     (reverse . dropWhile isSpace . reverse) `fmap`
      rawSystemProgramStdout verbosity ghcjsProg ["--print-libdir"]
 
-buildLib, replLib :: Verbosity
-         -> Cabal.Flag (Maybe Int)
-         -> PackageDescription
-         -> LocalBuildInfo
-         -> Library
-         -> ComponentLocalBuildInfo
-         -> IO ()
+buildLib, replLib :: Verbosity -> Cabal.Flag (Maybe Int) -> PackageDescription
+                  -> LocalBuildInfo -> Library -> ComponentLocalBuildInfo
+                  -> IO ()
 buildLib = buildOrReplLib False
 replLib  = buildOrReplLib True
 
@@ -333,7 +325,6 @@ buildOrReplLib forRepl verbosity numJobsFlag pkg_descr lbi lib clbi = do
              [libName] -> return libName
              [] -> die "No library name found when building library"
              _  -> die "Multiple library names found when building library"
-
   let libTargetDir = buildDir lbi
       numJobs = fromMaybe 1 $ fromFlagOrDefault Nothing numJobsFlag
       pkgid = packageId pkg_descr
@@ -345,8 +336,8 @@ buildOrReplLib forRepl verbosity numJobsFlag pkg_descr lbi lib clbi = do
       whenGHCiLib = when (not forRepl && withGHCiLib lbi && withVanillaLib lbi)
       ifReplLib = when forRepl
       comp = compiler lbi
+      props = getImplProps comp
       ghcjsVersion = compilerVersion comp
-      props = ghcjsVersionImplProps ghcjsVersion
       nativeToo = ghcjsNativeToo comp
       (Platform _hostArch hostOS) = hostPlatform lbi
 
@@ -374,12 +365,12 @@ buildOrReplLib forRepl verbosity numJobsFlag pkg_descr lbi lib clbi = do
 
       profOpts    = adjustExts "p_hi" "p_o" vanillaOpts `mappend` mempty {
                         ghcOptProfilingMode = toFlag True,
-                        ghcOptExtra         = ghcProfOptions libBi
+                        ghcOptExtra         = ghcjsProfOptions libBi
                       }
       sharedOpts  = adjustExts "dyn_hi" "dyn_o" vanillaOpts `mappend` mempty {
                         ghcOptDynLinkMode = toFlag GhcDynamicOnly,
                         ghcOptFPic        = toFlag True,
-                        ghcOptExtra       = ghcSharedOptions libBi
+                        ghcOptExtra       = ghcjsSharedOptions libBi
                       }
       linkerOpts = mempty {
                       ghcOptLinkOptions    = PD.ldOptions libBi,
@@ -389,7 +380,7 @@ buildOrReplLib forRepl verbosity numJobsFlag pkg_descr lbi lib clbi = do
                       ghcOptInputFiles     = [libTargetDir </> x | x <- cObjs]
                    }
       replOpts    = vanillaOpts {
-                      ghcOptExtra        = Common.filterGhciFlags
+                      ghcOptExtra        = Internal.filterGhciFlags
                                            (ghcOptExtra vanillaOpts),
                       ghcOptNumJobs      = mempty
                     }
@@ -410,18 +401,22 @@ buildOrReplLib forRepl verbosity numJobsFlag pkg_descr lbi lib clbi = do
            useDynToo = dynamicTooSupported &&
                        (forceVanillaLib || withVanillaLib lbi) &&
                        (forceSharedLib  || withSharedLib  lbi) &&
-                       null (ghcSharedOptions libBi)
+                       null (ghcjsSharedOptions libBi)
        if useDynToo
            then runGhcjsProg vanillaSharedOpts
            else if isGhcjsDynamic then do shared;  vanilla
                                 else do vanilla; shared
        whenProfLib (runGhcjsProg profOpts)
 
+  unless (null (jsSources libBi)) $ do
+    info verbosity "Copying JavaScript Sources..."
+    copyFiles verbosity (libTargetDir </> "js") (map (\x -> ("",x)) (jsSources libBi))
+
   -- build any C sources
   unless (null (cSources libBi) || not nativeToo) $ do
      info verbosity "Building C Sources..."
      sequence_
-       [ do let vanillaCcOpts = (Common.componentCcGhcOptions verbosity props
+       [ do let vanillaCcOpts = (Internal.componentCcGhcOptions verbosity props
                                     lbi libBi clbi libTargetDir filename)
                 profCcOpts    = vanillaCcOpts `mappend` mempty {
                                   ghcOptProfilingMode = toFlag True,
@@ -457,20 +452,20 @@ buildOrReplLib forRepl verbosity numJobsFlag pkg_descr lbi lib clbi = do
         vanillaLibFilePath = libTargetDir </> mkLibName            libName
         profileLibFilePath = libTargetDir </> mkProfLibName        libName
         sharedLibFilePath  = libTargetDir </> mkSharedLibName cid  libName
-        ghciLibFilePath    = libTargetDir </> Common.mkGHCiLibName libName
+        ghciLibFilePath    = libTargetDir </> Internal.mkGHCiLibName libName
         libInstallPath = libdir $ absoluteInstallDirs pkg_descr lbi NoCopyDest
         sharedLibInstallPath = libInstallPath </> mkSharedLibName cid libName
 
-    hObjs     <- Common.getHaskellObjects props lib lbi
+    hObjs     <- Internal.getHaskellObjects props lib lbi
                       libTargetDir objExtension True
     hProfObjs <-
       if (withProfLib lbi)
-              then Common.getHaskellObjects props lib lbi
+              then Internal.getHaskellObjects props lib lbi
                       libTargetDir ("p_" ++ objExtension) True
               else return []
     hSharedObjs <-
       if (withSharedLib lbi)
-              then Common.getHaskellObjects props lib lbi
+              then Internal.getHaskellObjects props lib lbi
                       libTargetDir ("dyn_" ++ objExtension) False
               else return []
 
@@ -533,7 +528,7 @@ buildOrReplExe forRepl verbosity numJobsFlag _pkg_descr lbi
 
   (ghcjsProg, _) <- requireProgram verbosity ghcjsProgram (withPrograms lbi)
   let comp         = compiler lbi
-      props        = ghcjsVersionImplProps (compilerVersion comp)
+      props        = getImplProps comp
       numJobs      = fromMaybe 1 $
                      fromFlagOrDefault Nothing numJobsFlag
       runGhcjsProg = runGHC verbosity ghcjsProg comp
@@ -558,6 +553,7 @@ buildOrReplExe forRepl verbosity numJobsFlag _pkg_descr lbi
   let isGhcjsDynamic      = ghcjsDynamic comp
       dynamicTooSupported = ghcjsSupportsDynamicToo comp
       isHaskellMain = elem (takeExtension srcMainFile) [".hs", ".lhs"]
+      jsSrcs        = jsSources exeBi
       cSrcs         = cSources exeBi ++ [srcMainFile | not isHaskellMain]
       cObjs         = map (`replaceExtension` objExtension) cSrcs
       nativeToo     = ghcjsNativeToo comp
@@ -574,11 +570,11 @@ buildOrReplExe forRepl verbosity numJobsFlag _pkg_descr lbi
                    }
       profOpts   = adjustExts "p_hi" "p_o" baseOpts `mappend` mempty {
                       ghcOptProfilingMode  = toFlag True,
-                      ghcOptExtra          = ghcProfOptions exeBi
+                      ghcOptExtra          = ghcjsProfOptions exeBi
                     }
       dynOpts    = adjustExts "dyn_hi" "dyn_o" baseOpts `mappend` mempty {
                       ghcOptDynLinkMode    = toFlag GhcDynamicOnly,
-                      ghcOptExtra          = ghcSharedOptions exeBi
+                      ghcOptExtra          = ghcjsSharedOptions exeBi
                     }
       dynTooOpts = adjustExts "dyn_hi" "dyn_o" staticOpts `mappend` mempty {
                       ghcOptDynLinkMode    = toFlag GhcStaticAndDynamic
@@ -588,10 +584,10 @@ buildOrReplExe forRepl verbosity numJobsFlag _pkg_descr lbi
                       ghcOptLinkLibs       = extraLibs exeBi,
                       ghcOptLinkLibPath    = extraLibDirs exeBi,
                       ghcOptLinkFrameworks = PD.frameworks exeBi,
-                      ghcOptInputFiles     = [exeDir </> x | x <- cObjs]
+                      ghcOptInputFiles     = [exeDir </> x | x <- cObjs] ++ jsSrcs
                    }
       replOpts   = baseOpts {
-                      ghcOptExtra          = Common.filterGhciFlags
+                      ghcOptExtra          = Internal.filterGhciFlags
                                              (ghcOptExtra baseOpts)
                    }
                    -- For a normal compile we do separate invocations of ghc for
@@ -621,7 +617,7 @@ buildOrReplExe forRepl verbosity numJobsFlag _pkg_descr lbi
       doingTH = EnableExtension TemplateHaskell `elem` allExtensions exeBi
       -- Should we use -dynamic-too instead of compiling twice?
       useDynToo = dynamicTooSupported && isGhcjsDynamic
-                  && doingTH && withStaticExe && null (ghcSharedOptions exeBi)
+                  && doingTH && withStaticExe && null (ghcjsSharedOptions exeBi)
       compileTHOpts | isGhcjsDynamic = dynOpts
                     | otherwise      = staticOpts
       compileForTH
@@ -648,7 +644,7 @@ buildOrReplExe forRepl verbosity numJobsFlag _pkg_descr lbi
   unless (null cSrcs || not nativeToo) $ do
    info verbosity "Building C Sources..."
    sequence_
-     [ do let opts = (Common.componentCcGhcOptions verbosity props lbi exeBi
+     [ do let opts = (Internal.componentCcGhcOptions verbosity props lbi exeBi
                          clbi exeDir filename) `mappend` mempty {
                        ghcOptDynLinkMode   = toFlag (if withDynExe lbi
                                                        then GhcDynamicOnly
@@ -685,6 +681,11 @@ installLib verbosity lbi targetDir dynlibTargetDir builtDir _pkg lib clbi = do
   whenProf    $ mapM_ copyModuleFiles ["js_p_hi", "js_p_o"]
   whenShared  $ mapM_ copyModuleFiles ["js_dyn_hi", "js_dyn_o"]
 
+  let jsDir = builtDir </> "js"
+  hasJsFiles <- doesDirectoryExist jsDir
+  when hasJsFiles $
+    installDirectoryContents verbosity jsDir (targetDir </> "js")
+
   when (ghcjsNativeToo $ compiler lbi) $ do
     -- copy .hi files over:
     whenVanilla $ copyModuleFiles "hi"
@@ -717,10 +718,10 @@ installLib verbosity lbi targetDir dynlibTargetDir builtDir _pkg lib clbi = do
 
     cid = compilerId (compiler lbi)
     libNames = componentLibraries clbi
-    vanillaLibNames = map mkLibName             libNames
-    profileLibNames = map mkProfLibName         libNames
-    ghciLibNames    = map Common.mkGHCiLibName  libNames
-    sharedLibNames  = map (mkSharedLibName cid) libNames
+    vanillaLibNames = map mkLibName              libNames
+    profileLibNames = map mkProfLibName          libNames
+    ghciLibNames    = map Internal.mkGHCiLibName libNames
+    sharedLibNames  = map (mkSharedLibName cid)  libNames
 
     hasLib    = not $ null (libModules lib)
                    && null (cSources (libBuildInfo lib))
@@ -759,6 +760,7 @@ libAbiHash verbosity pkg_descr lbi lib clbi = do
   let
       libBi       = libBuildInfo lib
       comp        = compiler lbi
+      props       = ghcjsVersionImplProps (compilerVersion comp)
       vanillaArgs =
         (componentGhcOptions verbosity lbi libBi clbi (buildDir lbi))
         `mappend` mempty {
@@ -768,7 +770,7 @@ libAbiHash verbosity pkg_descr lbi lib clbi = do
         }
       profArgs = adjustExts "js_p_hi" "js_p_o" vanillaArgs `mappend` mempty {
                      ghcOptProfilingMode = toFlag True,
-                     ghcOptExtra         = ghcProfOptions libBi
+                     ghcOptExtra         = ghcjsProfOptions libBi
                  }
       ghcArgs = if withVanillaLib lbi then vanillaArgs
            else if withProfLib    lbi then profArgs
@@ -793,21 +795,30 @@ registerPackage :: Verbosity
                 -> IO ()
 registerPackage verbosity installedPkgInfo _pkg lbi _inplace packageDbs = do
   let Just ghcjsPkg = lookupProgram ghcjsPkgProgram (withPrograms lbi)
-  HcPkg.reregister verbosity ghcjsPkg packageDbs (Right installedPkgInfo)
+  HcPkg.reregister verbosity (getImplProps $ compiler lbi)
+    ghcjsPkg packageDbs (Right installedPkgInfo)
 
 componentGhcOptions :: Verbosity -> LocalBuildInfo
                     -> BuildInfo -> ComponentLocalBuildInfo -> FilePath
                     -> GhcOptions
 componentGhcOptions verbosity lbi bi clbi odir =
-  let opts = Common.componentGhcOptions verbosity lbi bi clbi odir
+  let opts = Internal.componentGhcOptions verbosity lbi bi clbi odir
   in  opts { ghcOptExtra = ghcOptExtra opts `mappend` hcOptions GHCJS bi
            }
 
+ghcjsProfOptions :: BuildInfo -> [String]
+ghcjsProfOptions bi =
+  hcProfOptions GHC bi `mappend` hcProfOptions GHCJS bi
+
+ghcjsSharedOptions :: BuildInfo -> [String]
+ghcjsSharedOptions bi =
+  hcSharedOptions GHC bi `mappend` hcSharedOptions GHCJS bi
+
 ghcjsDynamic :: Compiler -> Bool
-ghcjsDynamic = Common.ghcLookupProperty "GHC Dynamic"
+ghcjsDynamic = Internal.ghcLookupProperty "GHC Dynamic"
 
 ghcjsSupportsDynamicToo :: Compiler -> Bool
-ghcjsSupportsDynamicToo = Common.ghcLookupProperty "Support dynamic-too"
+ghcjsSupportsDynamicToo = Internal.ghcLookupProperty "Support dynamic-too"
 
 findGhcjsGhcVersion :: Verbosity -> FilePath -> IO (Maybe Version)
 findGhcjsGhcVersion verbosity pgm =
@@ -822,28 +833,23 @@ findGhcjsPkgGhcVersion verbosity pgm =
 
 -- | Create an empty package DB at the specified location.
 initPackageDB :: Verbosity -> ProgramConfiguration -> FilePath -> IO ()
-initPackageDB verbosity conf dbPath = HcPkg.init verbosity ghcjsPkgProg dbPath
-  where
-    Just ghcjsPkgProg = lookupProgram ghcjsPkgProgram conf
+initPackageDB verbosity conf dbPath = do
+  Just ghcVer <- findGhcjsPkgGhcVersion verbosity (programPath ghcjsPkgProg)
+  HcPkg.init verbosity (ghcjsVersionImplProps ghcjsVer ghcVer) ghcjsPkgProg dbPath
+    where
+      Just ghcjsVer     = programVersion ghcjsPkgProg
+      Just ghcjsPkgProg = lookupProgram ghcjsPkgProgram conf
 
 -- | Run 'ghcjs-pkg' using a given package DB stack, directly forwarding the
 -- provided command-line arguments to it.
 invokeHcPkg :: Verbosity -> ProgramConfiguration -> PackageDBStack -> [String]
-               -> IO ()
-invokeHcPkg verbosity conf dbStack extraArgs =
-    HcPkg.invoke verbosity ghcjsPkgProg dbStack extraArgs
+            -> IO ()
+invokeHcPkg verbosity conf dbStack extraArgs = do
+    Just ghcVer <- findGhcjsPkgGhcVersion verbosity (programPath ghcjsPkgProg)
+    HcPkg.invoke verbosity (ghcjsVersionImplProps ghcjsVer ghcVer) ghcjsPkgProg
+      dbStack extraArgs
   where
+    Just ghcjsVer     = programVersion ghcjsPkgProg
     Just ghcjsPkgProg = lookupProgram ghcjsPkgProgram conf
 
--- | we may need the GHC version in the future at some point
-ghcjsVersionImplProps :: Version -> ImplProps
-ghcjsVersionImplProps _ = ImplProps
-  { hasCcOdirBug        = False
-  , supportsInfoFlags   = True
-  , fakeRecordPuns      = False
-  , noExtInSplitSuffix  = False
-  , separateGccMingw    = False
-  , supportsHaskell2010 = True
-  , reportsNoExt        = True
-  , alwaysNondecIndent  = True
-  }
+

@@ -229,7 +229,7 @@ instance Monoid GlobalFlags where
     globalNumericVersion    = combine globalNumericVersion,
     globalConfigFile        = combine globalConfigFile,
     globalSandboxConfigFile = combine globalConfigFile,
-    globalRemoteRepos       = combine globalRemoteRepos,
+    globalRemoteRepos       = replace globalRemoteRepos,
     globalCacheDir          = combine globalCacheDir,
     globalLocalRepos        = combine globalLocalRepos,
     globalLogsDir           = combine globalLogsDir,
@@ -238,6 +238,7 @@ instance Monoid GlobalFlags where
     globalIgnoreSandbox     = combine globalIgnoreSandbox
   }
     where combine field = field a `mappend` field b
+          replace field = field b
 
 globalRepos :: GlobalFlags -> [Repo]
 globalRepos globalFlags = remoteRepos ++ localRepos

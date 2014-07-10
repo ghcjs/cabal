@@ -1,6 +1,6 @@
 -----------------------------------------------------------------------------
 -- |
--- Module      :  Distribution.Simple.GHC.Base
+-- Module      :  Distribution.Simple.GHC.Internal
 -- Copyright   :  Isaac Jones 2003-2007
 --
 -- Maintainer  :  cabal-devel@haskell.org
@@ -40,9 +40,7 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE. -}
 
-module Distribution.Simple.GHC.Common (
-        ImplProps(..),
-        ghcVersionImplProps,
+module Distribution.Simple.GHC.Internal (
         configureToolchain,
         getLanguages,
         getExtensions,
@@ -57,6 +55,7 @@ module Distribution.Simple.GHC.Common (
         getHaskellObjects
  ) where
 
+import Distribution.Simple.GHC.Props ( ImplProps (..) )
 import Distribution.PackageDescription as PD
          ( PackageDescription(..), BuildInfo(..), Executable(..)
          , Library(..), libModules, exeModules, hcOptions
@@ -100,36 +99,6 @@ import System.FilePath          ( (</>), (<.>), takeExtension,
                                   takeDirectory, replaceExtension,
                                   splitExtension )
 import System.IO ( hClose, hPutStrLn )
-
-{- |
-     version-specific properties of the implementation.
-
-     do not use the program version for checking things like this in this
-     module since implementations other than GHC may follow a different
-     version scheme.
--}
-data ImplProps = ImplProps
-  { hasCcOdirBug        :: Bool -- ^ bug in -odir handling for C compilations.
-  , supportsInfoFlags   :: Bool -- ^ --info and --supported-languages flags
-  , fakeRecordPuns      :: Bool -- ^ use -XRecordPuns for NamedFieldPuns
-  , noExtInSplitSuffix  :: Bool -- ^ split suffix does not contain _p_o
-  , separateGccMingw    :: Bool -- ^ mingw and gcc are in separate directories
-  , supportsHaskell2010 :: Bool -- ^ -XHaskell2010 and -XHaskell98 flags
-  , reportsNoExt        :: Bool -- ^ --supported-languages gives Ext and NoExt
-  , alwaysNondecIndent  :: Bool -- ^ NondecreasingIndentation is always on
-  }
-
-ghcVersionImplProps :: Version -> ImplProps
-ghcVersionImplProps v = let mv xs = Version xs [] in ImplProps
-  { hasCcOdirBug        = v <  mv [6,4,1]
-  , supportsInfoFlags   = v >= mv [6,7]
-  , fakeRecordPuns      = v >= mv [6,8] && v < mv [6,10]
-  , noExtInSplitSuffix  = v <  mv [6,11]
-  , separateGccMingw    = v <  mv [6,12]
-  , supportsHaskell2010 = v >= mv [7]
-  , reportsNoExt        = v >= mv [7]
-  , alwaysNondecIndent  = v <  mv [7,1]
-  }
 
 targetPlatform :: [(String, String)] -> Maybe Platform
 targetPlatform ghcInfo = platformFromTriple =<< lookup "Target platform" ghcInfo
@@ -272,7 +241,7 @@ getLanguages _ props _
 getGhcInfo :: Verbosity -> ImplProps -> ConfiguredProgram
            -> IO [(String, String)]
 getGhcInfo verbosity props ghcProg
-  | supportsInfoFlags props = do
+  | flagInfoLanguages props = do
       xs <- getProgramOutput verbosity (suppressOverrideArgs ghcProg)
                  ["--info"]
       case reads xs of
@@ -287,7 +256,7 @@ getGhcInfo verbosity props ghcProg
 getExtensions :: Verbosity -> ImplProps -> ConfiguredProgram
               -> IO [(Extension, String)]
 getExtensions verbosity props ghcProg
-  | supportsInfoFlags props = do
+  | flagInfoLanguages props = do
     str <- getProgramOutput verbosity (suppressOverrideArgs ghcProg)
               ["--supported-languages"]
     let extStrs = if reportsNoExt props

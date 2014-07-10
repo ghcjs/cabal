@@ -72,6 +72,7 @@ import Distribution.Simple.Setup
 import Distribution.Simple.Utils
          ( die, debug, info, cabalVersion, tryFindPackageDesc, comparing
          , createDirectoryIfMissingVerbose, installExecutableFile
+         , installDirectoryContents
          , copyFileVerbose, rewriteFile, intercalate )
 import Distribution.Client.Utils
          ( inDir, tryCanonicalizePath
@@ -85,7 +86,7 @@ import Distribution.Compat.Exception
          ( catchIO )
 
 import System.Directory    ( doesFileExist )
-import System.FilePath     ( (</>), (<.>) )
+import System.FilePath     ( (</>), (<.>), dropExtension, takeExtension )
 import System.IO           ( Handle, hPutStr )
 import System.Exit         ( ExitCode(..), exitWith )
 import System.Process      ( runProcess, waitForProcess )
@@ -208,6 +209,11 @@ buildTypeAction Make      = Make.defaultMainArgs
 buildTypeAction Custom               = error "buildTypeAction Custom"
 buildTypeAction (UnknownBuildType _) = error "buildTypeAction UnknownBuildType"
 
+dropExeExtension :: FilePath -> FilePath
+dropExeExtension x
+  | not (null exeExtension) && takeExtension x == exeExtension = dropExtension x
+  | otherwise                                                  = x
+
 -- ------------------------------------------------------------
 -- * External SetupMethod
 -- ------------------------------------------------------------
@@ -218,11 +224,11 @@ externalSetupMethod verbosity options pkg bt mkargs = do
   createDirectoryIfMissingVerbose verbosity True setupDir
   (cabalLibVersion, mCabalLibInstalledPkgId, options') <- cabalLibVersionToUse
   debug verbosity $ "Using Cabal library version " ++ display cabalLibVersion
-  path <- if useCachedSetupExecutable
-          then getCachedSetupExecutable options'
-               cabalLibVersion mCabalLibInstalledPkgId
-          else compileSetupExecutable   options'
-               cabalLibVersion mCabalLibInstalledPkgId False
+  (path, _) <- if useCachedSetupExecutable
+               then fmap (\x -> (x,Nothing)) $ getCachedSetupExecutable options'
+                      cabalLibVersion mCabalLibInstalledPkgId
+               else compileSetupExecutable   options'
+                      cabalLibVersion mCabalLibInstalledPkgId False
   invokeSetupScript options' path (mkargs cabalLibVersion)
 
   where
@@ -427,10 +433,16 @@ externalSetupMethod verbosity options pkg bt mkargs = do
                "Found cached setup executable: " ++ cachedSetupProgFile
           else do
           debug verbosity $ "Setup executable not found in the cache."
-          src <- compileSetupExecutable options'
+          (src, jsDir) <- compileSetupExecutable options'
                  cabalLibVersion maybeCabalLibInstalledPkgId True
           createDirectoryIfMissingVerbose verbosity True setupCacheDir
           installExecutableFile verbosity src cachedSetupProgFile
+          case jsDir of
+            Nothing -> return ()
+            Just d  -> do
+              let tgt = dropExeExtension cachedSetupProgFile <.> "jsexe"
+              createDirectoryIfMissingVerbose verbosity False tgt
+              installDirectoryContents verbosity d tgt
     return cachedSetupProgFile
       where
         criticalSection'      = fromMaybe id
@@ -441,17 +453,23 @@ externalSetupMethod verbosity options pkg bt mkargs = do
   --
   compileSetupExecutable :: SetupScriptOptions
                          -> Version -> Maybe InstalledPackageId -> Bool
-                         -> IO FilePath
+                         -> IO (FilePath, Maybe FilePath)
   compileSetupExecutable options' cabalLibVersion maybeCabalLibInstalledPkgId
                          forceCompile = do
     setupHsNewer      <- setupHs          `moreRecentFile` setupProgFile
     cabalVersionNewer <- setupVersionFile `moreRecentFile` setupProgFile
     let outOfDate = setupHsNewer || cabalVersionNewer
-    when (outOfDate || forceCompile) $ do
+    jsDir <- if not (outOfDate || forceCompile) then return Nothing else do
       debug verbosity "Setup executable needs to be updated, compiling..."
       (compiler, conf, options'') <- configureCompiler options'
       debug verbosity ("compiler configured: " ++ show compiler)
       let cabalPkgid = PackageIdentifier (PackageName "Cabal") cabalLibVersion
+          (program, extraOpts, jsDir)
+            = case Simple.compilerFlavor compiler of
+                      Simple.GHCJS -> (ghcjsProgram, ["--building-cabal-setup"]
+                                      ,Just (dropExeExtension setupProgFile <.> "jsexe"))
+                      _            -> (ghcProgram, ["-threaded"], Nothing)
+
       let ghcOptions = mempty {
               ghcOptVerbosity       = Flag verbosity
             , ghcOptMode            = Flag GhcModeMake
@@ -465,12 +483,9 @@ externalSetupMethod verbosity options pkg bt mkargs = do
             , ghcOptPackages        = maybe []
                                       (\ipkgid -> [(ipkgid, cabalPkgid)])
                                       maybeCabalLibInstalledPkgId
-            , ghcOptExtra           = ["-threaded"]
+            , ghcOptExtra           = extraOpts
             }
       let ghcCmdLine = renderGhcOptions compiler ghcOptions
-          program = case Simple.compilerFlavor compiler of
-                      Simple.GHCJS -> ghcjsProgram
-                      _            -> ghcProgram
       case useLoggingHandle options of
         Nothing          -> runDbProgram verbosity program conf ghcCmdLine
 
@@ -478,7 +493,8 @@ externalSetupMethod verbosity options pkg bt mkargs = do
         (Just logHandle) -> do output <- getDbProgramOutput verbosity program
                                          conf ghcCmdLine
                                hPutStr logHandle output
-    return setupProgFile
+      return jsDir
+    return (setupProgFile, jsDir)
 
   invokeSetupScript :: SetupScriptOptions -> FilePath -> [String] -> IO ()
   invokeSetupScript options' path args = do

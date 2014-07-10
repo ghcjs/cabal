@@ -11,6 +11,7 @@ module Distribution.Simple.Program.GHC (
 
   ) where
 
+import Distribution.Simple.GHC.Props ( getImplProps, ImplProps(..) )
 import Distribution.Package
 import Distribution.ModuleName
 import Distribution.Simple.Compiler hiding (Flag)
@@ -21,7 +22,6 @@ import Distribution.Simple.Program.Types
 import Distribution.Simple.Program.Run
 import Distribution.Text
 import Distribution.Verbosity
-import Distribution.Version
 import Language.Haskell.Extension   ( Language(..), Extension(..) )
 
 import Data.Monoid
@@ -220,7 +220,6 @@ ghcInvocation :: ConfiguredProgram -> Compiler -> GhcOptions -> ProgramInvocatio
 ghcInvocation prog comp opts =
     programInvocation prog (renderGhcOptions comp opts)
 
-
 renderGhcOptions :: Compiler -> GhcOptions -> [String]
 renderGhcOptions comp opts
   | compilerFlavor comp `notElem` [GHC, GHCJS] =
@@ -247,7 +246,8 @@ renderGhcOptions comp opts
 
   , maybe [] verbosityOpts (flagToMaybe (ghcOptVerbosity opts))
 
-  , [ "-fbuilding-cabal-package" | flagBool ghcOptCabal, ver >= [6,11] ]
+  , [ "-fbuilding-cabal-package" | flagBool ghcOptCabal
+                                 , flagBuildingCabalPkg props ]
 
   ----------------
   -- Compilation
@@ -290,10 +290,12 @@ renderGhcOptions comp opts
   , concat [ ["-hisuf",   suf] | suf <- flag ghcOptHiSuffix  ]
   , concat [ ["-dynosuf", suf] | suf <- flag ghcOptDynObjSuffix ]
   , concat [ ["-dynhisuf",suf] | suf <- flag ghcOptDynHiSuffix  ]
-  , concat [ ["-outputdir", dir] | dir <- flag ghcOptOutputDir, ver >= [6,10] ]
+  , concat [ ["-outputdir", dir] | dir <- flag ghcOptOutputDir
+                                 , flagOutputDir props ]
   , concat [ ["-odir",    dir] | dir <- flag ghcOptObjDir ]
   , concat [ ["-hidir",   dir] | dir <- flag ghcOptHiDir  ]
-  , concat [ ["-stubdir", dir] | dir <- flag ghcOptStubDir, ver >= [6,8] ]
+  , concat [ ["-stubdir", dir] | dir <- flag ghcOptStubDir
+                               , flagStubdir props ]
 
   -----------------------
   -- Source search path
@@ -307,7 +309,8 @@ renderGhcOptions comp opts
   , [ "-I"    ++ dir | dir <- flags ghcOptCppIncludePath ]
   , [ "-optP" ++ opt | opt <- flags ghcOptCppOptions ]
   , concat [ [ "-optP-include", "-optP" ++ inc] | inc <- flags ghcOptCppIncludes ]
-  , [ "-#include \"" ++ inc ++ "\"" | inc <- flags ghcOptFfiIncludes, ver < [6,11] ]
+  , [ "-#include \"" ++ inc ++ "\"" | inc <- flags ghcOptFfiIncludes
+                                    , flagFfiIncludes props ]
   , [ "-optc" ++ opt | opt <- flags ghcOptCcOptions ]
 
   -----------------
@@ -327,16 +330,16 @@ renderGhcOptions comp opts
   , [ "-hide-all-packages"     | flagBool ghcOptHideAllPackages ]
   , [ "-no-auto-link-packages" | flagBool ghcOptNoAutoLinkPackages ]
 
-  , packageDbArgs version (flags ghcOptPackageDBs)
+  , packageDbArgs props (flags ghcOptPackageDBs)
 
-  , concat $ if ver >= [6,11]
+  , concat $ if flagPackageId props
       then [ ["-package-id", display ipkgid] | (ipkgid,_) <- flags ghcOptPackages ]
       else [ ["-package",    display  pkgid] | (_,pkgid)  <- flags ghcOptPackages ]
 
   ----------------------------
   -- Language and extensions
 
-  , if ver >= [7]
+  , if supportsHaskell2010 props
     then [ "-X" ++ display lang | lang <- flag ghcOptLanguage ]
     else []
 
@@ -350,7 +353,7 @@ renderGhcOptions comp opts
   -- GHCi
 
   , concat [ [ "-ghci-script", script ] | script <- flags  ghcOptGHCiScripts
-                                        , ver >= [7,2] ]
+                                        , flagGhciScript props ]
 
   ---------------
   -- Inputs
@@ -370,11 +373,10 @@ renderGhcOptions comp opts
 
 
   where
+    props        = getImplProps comp
     flag     flg = flagToList (flg opts)
     flags    flg = flg opts
     flagBool flg = fromFlagOrDefault False (flg opts)
-
-    version@(Version ver _) = compilerVersion comp
 
 verbosityOpts :: Verbosity -> [String]
 verbosityOpts verbosity
@@ -383,8 +385,8 @@ verbosityOpts verbosity
   | otherwise              = ["-w", "-v0"]
 
 
-packageDbArgs :: Version -> PackageDBStack -> [String]
-packageDbArgs (Version ver _) dbstack = case dbstack of
+packageDbArgs :: ImplProps -> PackageDBStack -> [String]
+packageDbArgs props dbstack = case dbstack of
   (GlobalPackageDB:UserPackageDB:dbs) -> concatMap specific dbs
   (GlobalPackageDB:dbs)               -> ("-no-user-" ++ packageDbFlag)
                                        : concatMap specific dbs
@@ -394,9 +396,8 @@ packageDbArgs (Version ver _) dbstack = case dbstack of
     specific _ = ierror
     ierror     = error $ "internal error: unexpected package db stack: "
                       ++ show dbstack
-
     packageDbFlag
-      | ver < [7,5]
+      | flagPackageConf props
       = "package-conf"
       | otherwise
       = "package-db"
