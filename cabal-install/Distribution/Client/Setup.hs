@@ -238,7 +238,8 @@ instance Monoid GlobalFlags where
     globalIgnoreSandbox     = combine globalIgnoreSandbox
   }
     where combine field = field a `mappend` field b
-          replace field = field b
+          replace field | null (field b) = field a
+                        | otherwise      = field b
 
 globalRepos :: GlobalFlags -> [Repo]
 globalRepos globalFlags = remoteRepos ++ localRepos
