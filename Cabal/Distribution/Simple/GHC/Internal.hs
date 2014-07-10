@@ -373,8 +373,8 @@ componentCcGhcOptions verbosity props lbi bi clbi pref filename =
       ghcOptObjDir         = toFlag odir
     }
   where
-    odir | hasCcOdirBug props  = pref
-         | otherwise           = pref </> takeDirectory filename
+    odir | hasCcOdirBug props  = pref </> takeDirectory filename
+         | otherwise           = pref
          -- ghc 6.4.0 had a bug in -odir handling for C compilations.
 
 componentGhcOptions :: Verbosity -> LocalBuildInfo
