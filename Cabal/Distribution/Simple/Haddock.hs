@@ -33,7 +33,7 @@ import Distribution.PackageDescription as PD
          , TestSuite(..), TestSuiteInterface(..)
          , Benchmark(..), BenchmarkInterface(..) )
 import Distribution.Simple.Compiler
-         ( CompilerFlavor(..), Compiler(..), compilerVersion )
+         ( CompilerFlavor(..), Compiler(..), hcVersion )
 import Distribution.Simple.GHC ( componentGhcOptions, ghcLibDir )
 import Distribution.Simple.Program.GHC
          ( GhcOptions(..), GhcDynLinkMode(..), renderGhcOptions )
@@ -149,16 +149,16 @@ haddock pkg_descr lbi suffixes flags = do
 
     haddockGhcVersionStr <- rawSystemProgramStdout verbosity confHaddock
                               ["--ghc-version"]
-    case simpleParse haddockGhcVersionStr of
-      Nothing -> die "Could not get GHC version from Haddock"
-      Just haddockGhcVersion
+    case (simpleParse haddockGhcVersionStr, hcVersion GHC comp) of
+      (Nothing, _) -> die "Could not get GHC version from Haddock"
+      (_, Nothing) -> die "Could not get GHC version from compiler"
+      (Just haddockGhcVersion, Just ghcVersion)
         | haddockGhcVersion == ghcVersion -> return ()
         | otherwise -> die $
                "Haddock's internal GHC version must match the configured "
             ++ "GHC version.\n"
             ++ "The GHC version is " ++ display ghcVersion ++ " but "
             ++ "haddock is using GHC version " ++ display haddockGhcVersion
-        where ghcVersion = compilerVersion comp
 
     -- the tools match the requests, we can proceed
 
@@ -278,6 +278,7 @@ fromLibrary verbosity tmp lbi lib clbi htmlTemplate haddockVersion = do
             else if withSharedLib lbi
             then return sharedOpts
             else die "Must have vanilla or shared libraries enabled in order to run haddock"
+    ghcVersion <- maybe (die "Compiler has no GHC version") return (hcVersion GHC (compiler lbi))
     return ifaceArgs {
       argHideModules = (mempty,otherModules $ bi),
       argGhcOptions  = toFlag (opts, ghcVersion),
@@ -285,7 +286,6 @@ fromLibrary verbosity tmp lbi lib clbi htmlTemplate haddockVersion = do
     }
   where
     bi = libBuildInfo lib
-    ghcVersion = compilerVersion (compiler lbi)
 
 fromExecutable :: Verbosity
                -> FilePath
@@ -317,6 +317,7 @@ fromExecutable verbosity tmp lbi exe clbi htmlTemplate haddockVersion = do
             else if withSharedLib lbi
             then return sharedOpts
             else die "Must have vanilla or shared libraries enabled in order to run haddock"
+    ghcVersion <- maybe (die "Compiler has no GHC version") return (hcVersion GHC (compiler lbi))
     return ifaceArgs {
       argGhcOptions = toFlag (opts, ghcVersion),
       argOutputDir  = Dir (exeName exe),
@@ -325,7 +326,6 @@ fromExecutable verbosity tmp lbi exe clbi htmlTemplate haddockVersion = do
     }
   where
     bi = buildInfo exe
-    ghcVersion = compilerVersion (compiler lbi)
 
 compToExe :: Component -> Maybe Executable
 compToExe comp =
