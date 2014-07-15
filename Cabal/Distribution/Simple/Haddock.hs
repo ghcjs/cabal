@@ -33,7 +33,7 @@ import Distribution.PackageDescription as PD
          , TestSuite(..), TestSuiteInterface(..)
          , Benchmark(..), BenchmarkInterface(..) )
 import Distribution.Simple.Compiler
-         ( CompilerFlavor(..), Compiler(..), hcVersion )
+         ( CompilerFlavor(..), Compiler(..), compilerFlavorVersion )
 import Distribution.Simple.GHC ( componentGhcOptions, ghcLibDir )
 import Distribution.Simple.Program.GHC
          ( GhcOptions(..), GhcDynLinkMode(..), renderGhcOptions )
@@ -149,7 +149,7 @@ haddock pkg_descr lbi suffixes flags = do
 
     haddockGhcVersionStr <- rawSystemProgramStdout verbosity confHaddock
                               ["--ghc-version"]
-    case (simpleParse haddockGhcVersionStr, hcVersion GHC comp) of
+    case (simpleParse haddockGhcVersionStr, compilerFlavorVersion GHC comp) of
       (Nothing, _) -> die "Could not get GHC version from Haddock"
       (_, Nothing) -> die "Could not get GHC version from compiler"
       (Just haddockGhcVersion, Just ghcVersion)
@@ -278,7 +278,7 @@ fromLibrary verbosity tmp lbi lib clbi htmlTemplate haddockVersion = do
             else if withSharedLib lbi
             then return sharedOpts
             else die "Must have vanilla or shared libraries enabled in order to run haddock"
-    ghcVersion <- maybe (die "Compiler has no GHC version") return (hcVersion GHC (compiler lbi))
+    ghcVersion <- maybe (die "Compiler has no GHC version") return (compilerFlavorVersion GHC (compiler lbi))
     return ifaceArgs {
       argHideModules = (mempty,otherModules $ bi),
       argGhcOptions  = toFlag (opts, ghcVersion),
@@ -317,7 +317,7 @@ fromExecutable verbosity tmp lbi exe clbi htmlTemplate haddockVersion = do
             else if withSharedLib lbi
             then return sharedOpts
             else die "Must have vanilla or shared libraries enabled in order to run haddock"
-    ghcVersion <- maybe (die "Compiler has no GHC version") return (hcVersion GHC (compiler lbi))
+    ghcVersion <- maybe (die "Compiler has no GHC version") return (compilerFlavorVersion GHC (compiler lbi))
     return ifaceArgs {
       argGhcOptions = toFlag (opts, ghcVersion),
       argOutputDir  = Dir (exeName exe),
