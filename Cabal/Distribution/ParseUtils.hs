@@ -267,7 +267,24 @@ ppFields fields x =
    vcat [ ppField name (getter x) | FieldDescr name getter _ <- fields ]
 
 ppField :: String -> Doc -> Doc
-ppField name fielddoc = text name <> colon <+> fielddoc
+ppField name fielddoc 
+   | isEmpty fielddoc         = empty
+   | name `elem` nestedFields = text name <> colon $+$ nest indentWith fielddoc
+   | otherwise                = text name <> colon <+> fielddoc
+   where
+      nestedFields =
+         [ "description"
+         , "build-depends"
+         , "data-files"
+         , "extra-source-files"
+         , "extra-tmp-files"
+         , "exposed-modules"
+         , "c-sources"
+         , "extra-libraries"
+         , "includes"
+         , "install-includes"
+         , "other-modules"
+         ]
 
 showFields :: [FieldDescr a] -> a -> String
 showFields fields = render . ($+$ text "") . ppFields fields
