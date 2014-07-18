@@ -1574,9 +1574,6 @@ data TestFlags = TestFlags {
     testMachineLog  :: Flag PathTemplate,
     testShowDetails :: Flag TestShowDetails,
     testKeepTix     :: Flag Bool,
-    --TODO: eliminate the test list and pass it directly as positional args to
-    --the testHook
-    testList        :: Flag [String],
     -- TODO: think about if/how options are passed to test exes
     testOptions     :: [PathTemplate]
   }
@@ -1589,7 +1586,6 @@ defaultTestFlags  = TestFlags {
     testMachineLog  = toFlag $ toPathTemplate $ "$pkgid.log",
     testShowDetails = toFlag Failures,
     testKeepTix     = toFlag False,
-    testList        = Flag [],
     testOptions     = []
   }
 
@@ -1662,7 +1658,6 @@ instance Monoid TestFlags where
     testMachineLog  = mempty,
     testShowDetails = mempty,
     testKeepTix     = mempty,
-    testList        = mempty,
     testOptions     = mempty
   }
   mappend a b = TestFlags {
@@ -1672,7 +1667,6 @@ instance Monoid TestFlags where
     testMachineLog  = combine testMachineLog,
     testShowDetails = combine testShowDetails,
     testKeepTix     = combine testKeepTix,
-    testList        = combine testList,
     testOptions     = combine testOptions
   }
     where combine field = field a `mappend` field b
