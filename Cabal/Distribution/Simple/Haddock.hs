@@ -20,6 +20,9 @@ module Distribution.Simple.Haddock (
   haddockPackagePaths
   ) where
 
+import qualified Distribution.Simple.GHC   as GHC
+import qualified Distribution.Simple.GHCJS as GHCJS
+
 -- local
 import Distribution.Package
          ( PackageIdentifier(..)
@@ -33,8 +36,8 @@ import Distribution.PackageDescription as PD
          , TestSuite(..), TestSuiteInterface(..)
          , Benchmark(..), BenchmarkInterface(..) )
 import Distribution.Simple.Compiler
-         ( CompilerFlavor(..), Compiler(..), compilerFlavorVersion )
-import Distribution.Simple.GHC ( componentGhcOptions, ghcLibDir )
+         ( CompilerFlavor(..), Compiler(..), compilerVersion
+         , compilerFlavor, compilerFlavorVersion )
 import Distribution.Simple.Program.GHC
          ( GhcOptions(..), GhcDynLinkMode(..), renderGhcOptions )
 import Distribution.Simple.Program
@@ -248,6 +251,18 @@ fromPackageDescription pkg_descr =
         subtitle | null (synopsis pkg_descr) = ""
                  | otherwise                 = ": " ++ synopsis pkg_descr
 
+componentGhcOptions :: Verbosity -> LocalBuildInfo
+                 -> BuildInfo -> ComponentLocalBuildInfo -> FilePath
+                 -> GhcOptions
+componentGhcOptions verbosity lbi bi clbi odir =
+  let f = case compilerFlavor (compiler lbi) of
+            GHC   -> GHC.componentGhcOptions
+            GHCJS -> GHCJS.componentGhcOptions
+            _     -> error $
+                       "Distribution.Simple.Haddock.componentGhcOptions:" ++
+                       "haddock only supports GHC and GHCJS"
+  in f verbosity lbi bi clbi odir
+
 fromLibrary :: Verbosity
             -> FilePath
             -> LocalBuildInfo -> Library -> ComponentLocalBuildInfo
@@ -376,7 +391,10 @@ getGhcCppOpts haddockVersion bi =
 getGhcLibDir :: Verbosity -> LocalBuildInfo
              -> IO HaddockArgs
 getGhcLibDir verbosity lbi = do
-    l <- ghcLibDir verbosity lbi
+    l <- case compilerFlavor (compiler lbi) of
+            GHC   -> GHC.ghcLibDir     verbosity lbi
+            GHCJS -> GHCJS.ghcjsLibDir verbosity lbi
+            _     -> error "haddock only supports GHC and GHCJS"
     return $ mempty { argGhcLibDir = Flag l }
 
 -- ------------------------------------------------------------------------------
