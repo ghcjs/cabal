@@ -22,7 +22,7 @@ module Distribution.Simple.Compiler (
         -- * Haskell implementations
         module Distribution.Compiler,
         Compiler(..),
-        showCompilerId, compilerFlavor, compilerVersion,
+        showCompilerId, compilerFlavor, compilerVersion, compilerFlavorVersion,
 
         -- * Support for package databases
         PackageDB(..),
@@ -75,6 +75,10 @@ compilerFlavor = (\(CompilerId f _ _) -> f) . compilerId
 
 compilerVersion :: Compiler -> Version
 compilerVersion = (\(CompilerId _ v _) -> v) . compilerId
+
+compilerFlavorVersion :: CompilerFlavor -> Compiler -> Maybe Version
+compilerFlavorVersion hc comp = compilerFlavorVersion' (compilerId comp)
+    where compilerFlavorVersion' (CompilerId hc' v next) = if hc' == hc then Just v else maybe Nothing compilerFlavorVersion' next
 
 -- ------------------------------------------------------------
 -- * Package databases
