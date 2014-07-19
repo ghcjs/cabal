@@ -390,9 +390,11 @@ buildOrReplLib forRepl verbosity numJobsFlag pkg_descr lbi lib clbi = do
                       ghcOptOptimisation = toFlag GhcNoOptimisation
                     }
 
-      vanillaSharedOpts = adjustExts "dyn_hi" "dyn_o" vanillaOpts `mappend`
+      vanillaSharedOpts = vanillaOpts `mappend`
                             mempty {
-                              ghcOptDynLinkMode  = toFlag GhcStaticAndDynamic
+                              ghcOptDynLinkMode  = toFlag GhcStaticAndDynamic,
+                              ghcOptDynHiSuffix  = toFlag "dyn_hi",
+                              ghcOptDynObjSuffix = toFlag "dyn_o"
                             }
 
   unless (null (libModules lib)) $
