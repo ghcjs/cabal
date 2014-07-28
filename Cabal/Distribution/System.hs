@@ -122,6 +122,7 @@ data Arch = I386  | X86_64 | PPC | PPC64 | Sparc
           | IA64  | S390
           | Alpha | Hppa   | Rs6000
           | M68k  | Vax
+          | JavaScript
           | OtherArch String
   deriving (Eq, Ord, Show, Read, Typeable, Data)
 
@@ -130,7 +131,8 @@ knownArches = [I386, X86_64, PPC, PPC64, Sparc
               ,Arm, Mips, SH
               ,IA64, S390
               ,Alpha, Hppa, Rs6000
-              ,M68k, Vax]
+              ,M68k, Vax
+              ,JavaScript]
 
 archAliases :: ClassificationStrictness -> Arch -> [String]
 archAliases Strict _     = []

@@ -2,6 +2,7 @@ module Distribution.Simple.Test.ExeV10
        ( runTest
        ) where
 
+import Distribution.Simple.Test.Utils ( testSuiteCmd, testOption )
 import Distribution.Compat.CreatePipe ( createPipe )
 import Distribution.Compat.Environment ( getEnvironment )
 import qualified Distribution.PackageDescription as PD
@@ -13,6 +14,7 @@ import Distribution.Simple.InstallDirs
     ( fromPathTemplate, initialPathTemplateEnv, PathTemplateVariable(..)
     , substPathTemplate , toPathTemplate, PathTemplate )
 import qualified Distribution.Simple.LocalBuildInfo as LBI
+import Distribution.Simple.Program.Db ( lookupProgram )
 import Distribution.Simple.Setup ( TestFlags(..), TestShowDetails(..), fromFlag )
 import Distribution.Simple.Test.Log
 import Distribution.Simple.Utils ( die, notice, rawSystemIOWithEnv )
@@ -38,12 +40,7 @@ runTest pkg_descr lbi flags suite = do
     pwd <- getCurrentDirectory
     existingEnv <- getEnvironment
 
-    let cmd = LBI.buildDir lbi </> PD.testName suite
-                  </> PD.testName suite <.> exeExtension
-    -- Check that the test executable exists.
-    exists <- doesFileExist cmd
-    unless exists $ die $ "Error: Could not find test program \"" ++ cmd
-                          ++ "\". Did you build the package first?"
+    (cmd, cmdArgs) <- testSuiteCmd lbi (PD.testName suite) "test"
 
     -- Remove old .tix files if appropriate.
     unless (fromFlag $ testKeepTix flags) $ do
@@ -75,7 +72,8 @@ runTest pkg_descr lbi flags suite = do
         shellEnv = (pkgPathEnvVar pkg_descr "datadir", dataDirPath)
                    : ("HPCTIXFILE", tixFile)
                    : existingEnv
-    exit <- rawSystemIOWithEnv verbosity cmd opts Nothing (Just shellEnv)
+    exit <- rawSystemIOWithEnv verbosity cmd (cmdArgs ++ opts) Nothing
+                               (Just shellEnv)
                                -- these handles are automatically closed
                                Nothing (Just wOut) (Just wOut)
 
@@ -136,17 +134,4 @@ runTest pkg_descr lbi flags suite = do
                                          pkg_descr lbi n l
                 }
 
--- TODO: This is abusing the notion of a 'PathTemplate'.  The result
--- isn't neccesarily a path.
-testOption :: PD.PackageDescription
-           -> LBI.LocalBuildInfo
-           -> PD.TestSuite
-           -> PathTemplate
-           -> String
-testOption pkg_descr lbi suite template =
-    fromPathTemplate $ substPathTemplate env template
-  where
-    env = initialPathTemplateEnv
-          (PD.package pkg_descr) (compilerId $ LBI.compiler lbi)
-          (LBI.hostPlatform lbi) ++
-          [(TestSuiteNameVar, toPathTemplate $ PD.testName suite)]
+

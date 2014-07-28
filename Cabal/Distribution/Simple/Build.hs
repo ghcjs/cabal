@@ -179,8 +179,9 @@ repl pkg_descr lbi flags suffixes args = do
 startInterpreter :: Verbosity -> ProgramDb -> Compiler -> PackageDBStack -> IO ()
 startInterpreter verbosity programDb comp packageDBs =
   case compilerFlavor comp of
-    GHC -> GHC.startInterpreter verbosity programDb comp packageDBs
-    _   -> die "A REPL is not supported with this compiler."
+    GHC   -> GHC.startInterpreter   verbosity programDb comp packageDBs
+    GHCJS -> GHCJS.startInterpreter verbosity programDb comp packageDBs
+    _     -> die "A REPL is not supported with this compiler."
 
 buildComponent :: Verbosity
                -> Flag (Maybe Int)
@@ -464,14 +465,14 @@ buildExe :: Verbosity -> Flag (Maybe Int)
                       -> Executable         -> ComponentLocalBuildInfo -> IO ()
 buildExe verbosity numJobs pkg_descr lbi exe clbi =
   case compilerFlavor (compiler lbi) of
-    GHC  -> GHC.buildExe    verbosity numJobs pkg_descr lbi exe clbi
+    GHC   -> GHC.buildExe   verbosity numJobs pkg_descr lbi exe clbi
     GHCJS -> GHCJS.buildExe verbosity numJobs pkg_descr lbi exe clbi
-    JHC  -> JHC.buildExe    verbosity         pkg_descr lbi exe clbi
-    LHC  -> LHC.buildExe    verbosity         pkg_descr lbi exe clbi
-    Hugs -> Hugs.buildExe   verbosity         pkg_descr lbi exe clbi
-    NHC  -> NHC.buildExe    verbosity         pkg_descr lbi exe clbi
-    UHC  -> UHC.buildExe    verbosity         pkg_descr lbi exe clbi
-    _    -> die "Building is not supported with this compiler."
+    JHC   -> JHC.buildExe   verbosity         pkg_descr lbi exe clbi
+    LHC   -> LHC.buildExe   verbosity         pkg_descr lbi exe clbi
+    Hugs  -> Hugs.buildExe  verbosity         pkg_descr lbi exe clbi
+    NHC   -> NHC.buildExe   verbosity         pkg_descr lbi exe clbi
+    UHC   -> UHC.buildExe   verbosity         pkg_descr lbi exe clbi
+    _     -> die "Building is not supported with this compiler."
 
 replLib :: Verbosity -> PackageDescription -> LocalBuildInfo
                      -> Library            -> ComponentLocalBuildInfo -> IO ()
@@ -479,15 +480,17 @@ replLib verbosity pkg_descr lbi lib clbi =
   case compilerFlavor (compiler lbi) of
     -- 'cabal repl' doesn't need to support 'ghc --make -j', so we just pass
     -- NoFlag as the numJobs parameter.
-    GHC  -> GHC.replLib verbosity NoFlag pkg_descr lbi lib clbi
-    _    -> die "A REPL is not supported for this compiler."
+    GHC   -> GHC.replLib   verbosity NoFlag pkg_descr lbi lib clbi
+    GHCJS -> GHCJS.replLib verbosity NoFlag pkg_descr lbi lib clbi
+    _     -> die "A REPL is not supported for this compiler."
 
 replExe :: Verbosity -> PackageDescription -> LocalBuildInfo
                      -> Executable         -> ComponentLocalBuildInfo -> IO ()
 replExe verbosity pkg_descr lbi exe clbi =
   case compilerFlavor (compiler lbi) of
-    GHC  -> GHC.replExe verbosity NoFlag pkg_descr lbi exe clbi
-    _    -> die "A REPL is not supported for this compiler."
+    GHC   -> GHC.replExe   verbosity NoFlag pkg_descr lbi exe clbi
+    GHCJS -> GHCJS.replExe verbosity NoFlag pkg_descr lbi exe clbi
+    _     -> die "A REPL is not supported for this compiler."
 
 
 initialBuildSteps :: FilePath -- ^"dist" prefix

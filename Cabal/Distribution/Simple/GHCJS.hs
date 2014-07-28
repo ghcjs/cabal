@@ -1,15 +1,18 @@
 module Distribution.Simple.GHCJS (
-        configure, getInstalledPackages,
-        getPackageDBContents,
+        configure, getInstalledPackages, getPackageDBContents,
         buildLib, buildExe,
+        replLib, replExe,
+        startInterpreter,
         installLib, installExe,
         libAbiHash,
         initPackageDB,
+        invokeHcPkg,
         registerPackage,
         componentGhcOptions,
         ghcjsLibDir,
         ghcjsDynamic,
-        invokeHcPkg
+        ghcjsGlobalPackageDB,
+        ghcjsRunCmd
   ) where
 
 import Distribution.Simple.GHC.Props ( getImplProps, ghcjsVersionImplProps )
@@ -311,6 +314,12 @@ ghcjsLibDir' verbosity ghcjsProg =
     (reverse . dropWhile isSpace . reverse) `fmap`
      rawSystemProgramStdout verbosity ghcjsProg ["--print-libdir"]
 
+-- | Return the 'FilePath' to the global GHC package database.
+ghcjsGlobalPackageDB :: Verbosity -> ConfiguredProgram -> IO FilePath
+ghcjsGlobalPackageDB verbosity ghcjsProg =
+    (reverse . dropWhile isSpace . reverse) `fmap`
+     rawSystemProgramStdout verbosity ghcjsProg ["--print-global-package-db"]
+
 buildLib, replLib :: Verbosity -> Cabal.Flag (Maybe Int) -> PackageDescription
                   -> LocalBuildInfo -> Library -> ComponentLocalBuildInfo
                   -> IO ()
@@ -340,7 +349,6 @@ buildOrReplLib forRepl verbosity numJobsFlag pkg_descr lbi lib clbi = do
       ghcjsVersion = compilerVersion comp
       nativeToo = ghcjsNativeToo comp
       (Platform _hostArch hostOS) = hostPlatform lbi
-
   (ghcjsProg, _) <- requireProgram verbosity ghcjsProgram (withPrograms lbi)
   let runGhcjsProg        = runGHC verbosity ghcjsProg comp
       libBi               = libBuildInfo lib
@@ -515,6 +523,18 @@ buildOrReplLib forRepl verbosity numJobsFlag pkg_descr lbi lib clbi = do
 
       whenSharedLib False $
         runGhcjsProg ghcSharedLinkArgs
+
+-- | Start a REPL without loading any source files.
+startInterpreter :: Verbosity -> ProgramConfiguration -> Compiler
+                 -> PackageDBStack -> IO ()
+startInterpreter verbosity conf comp packageDBs = do
+  let replOpts = mempty {
+        ghcOptMode       = toFlag GhcModeInteractive,
+        ghcOptPackageDBs = packageDBs
+        }
+  checkPackageDbStack packageDBs
+  (ghcjsProg, _) <- requireProgram verbosity ghcjsProgram conf
+  runGHC verbosity ghcjsProg comp replOpts
 
 buildExe, replExe :: Verbosity          -> Cabal.Flag (Maybe Int)
                   -> PackageDescription -> LocalBuildInfo
@@ -855,3 +875,16 @@ invokeHcPkg verbosity conf dbStack extraArgs = do
     Just ghcjsPkgProg = lookupProgram ghcjsPkgProgram conf
 
 
+-- | Get the JavaScript file name and command and arguments to run a
+--   program compiled by GHCJS
+--   the exe should be the base program name without exe extension
+ghcjsRunCmd :: ProgramConfiguration -> FilePath
+            -> (FilePath, FilePath, [String])
+ghcjsRunCmd conf exe = ( script, programPath ghcjsProg
+                       , programDefaultArgs ghcjsProg ++
+                         programOverrideArgs ghcjsProg ++
+                         ["--run"]
+                       )
+  where
+    script         = exe <.> "jsexe" </> "all" <.> "js"
+    Just ghcjsProg = lookupProgram ghcjsProgram conf

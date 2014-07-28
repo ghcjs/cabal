@@ -15,6 +15,7 @@ module Distribution.Simple.Bench
     ( bench
     ) where
 
+import Distribution.Simple.Test.Utils ( testSuiteCmd )
 import qualified Distribution.PackageDescription as PD
     ( PackageDescription(..), BuildInfo(buildable)
     , Benchmark(..), BenchmarkInterface(..), benchmarkType, hasBenchmarks )
@@ -54,21 +55,15 @@ bench args pkg_descr lbi flags = do
         doBench bm =
             case PD.benchmarkInterface bm of
               PD.BenchmarkExeV10 _ _ -> do
-                  let cmd = LBI.buildDir lbi </> PD.benchmarkName bm
-                            </> PD.benchmarkName bm <.> exeExtension
-                      options = map (benchOption pkg_descr lbi bm) $
+                  let options = map (benchOption pkg_descr lbi bm) $
                                 benchmarkOptions flags
                       name = PD.benchmarkName bm
-                  -- Check that the benchmark executable exists.
-                  exists <- doesFileExist cmd
-                  unless exists $ die $
-                      "Error: Could not find benchmark program \""
-                      ++ cmd ++ "\". Did you build the package first?"
 
+                  (cmd, cmdArgs) <- testSuiteCmd lbi name "benchmark"
                   notice verbosity $ startMessage name
                   -- This will redirect the child process
                   -- stdout/stderr to the parent process.
-                  exitcode <- rawSystemExitCode verbosity cmd options
+                  exitcode <- rawSystemExitCode verbosity cmd (cmdArgs++options)
                   notice verbosity $ finishMessage name exitcode
                   return exitcode
 

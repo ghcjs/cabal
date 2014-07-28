@@ -6,6 +6,7 @@ module Distribution.Simple.Test.LibV09
        , writeSimpleTestStub
        ) where
 
+import Distribution.Simple.Test.Utils ( testSuiteCmd, testOption )
 import Distribution.Compat.CreatePipe ( createPipe )
 import Distribution.Compat.Environment ( getEnvironment )
 import Distribution.Compat.TempFile ( openTempFile )
@@ -46,12 +47,7 @@ runTest pkg_descr lbi flags suite = do
     pwd <- getCurrentDirectory
     existingEnv <- getEnvironment
 
-    let cmd = LBI.buildDir lbi </> stubName suite
-                  </> stubName suite <.> exeExtension
-    -- Check that the test executable exists.
-    exists <- doesFileExist cmd
-    unless exists $ die $ "Error: Could not find test program \"" ++ cmd
-                          ++ "\". Did you build the package first?"
+    (cmd, cmdArgs) <- testSuiteCmd lbi (stubName suite) "test"
 
     -- Remove old .tix files if appropriate.
     unless (fromFlag $ testKeepTix flags) $ do
@@ -82,7 +78,8 @@ runTest pkg_descr lbi flags suite = do
                                : ("HPCTIXFILE", (</>) pwd
                                  $ tixFilePath distPref $ PD.testName suite)
                                : existingEnv
-                rawSystemIOWithEnv verbosity cmd opts Nothing (Just shellEnv)
+                rawSystemIOWithEnv verbosity cmd (cmdArgs++opts) Nothing
+                                   (Just shellEnv)
                                    -- these handles are closed automatically
                                    (Just rIn) (Just wOut) (Just wOut)
 
@@ -136,21 +133,6 @@ runTest pkg_descr lbi flags suite = do
 
     distPref = fromFlag $ testDistPref flags
     verbosity = fromFlag $ testVerbosity flags
-
--- TODO: This is abusing the notion of a 'PathTemplate'.  The result
--- isn't neccesarily a path.
-testOption :: PD.PackageDescription
-           -> LBI.LocalBuildInfo
-           -> PD.TestSuite
-           -> PathTemplate
-           -> String
-testOption pkg_descr lbi suite template =
-    fromPathTemplate $ substPathTemplate env template
-  where
-    env = initialPathTemplateEnv
-          (PD.package pkg_descr) (compilerId $ LBI.compiler lbi)
-          (LBI.hostPlatform lbi) ++
-          [(TestSuiteNameVar, toPathTemplate $ PD.testName suite)]
 
 -- Test stub ----------
 
@@ -237,3 +219,4 @@ stubWriteLog f n logs = do
     when (suiteError logs) $ exitWith $ ExitFailure 2
     when (suiteFailed logs) $ exitWith $ ExitFailure 1
     exitWith ExitSuccess
+
