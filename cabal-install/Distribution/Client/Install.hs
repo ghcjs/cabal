@@ -116,7 +116,7 @@ import qualified Distribution.Simple.Setup as Cabal
          , testCommand, TestFlags(..), emptyTestFlags )
 import Distribution.Simple.Utils
          ( createDirectoryIfMissingVerbose, rawSystemExit, comparing
-         , writeFileAtomic, withTempFile , withFileContents )
+         , writeFileAtomic, withTempFile , withUTF8FileContents )
 import Distribution.Simple.InstallDirs as InstallDirs
          ( PathTemplate, fromPathTemplate, toPathTemplate, substPathTemplate
          , initialPathTemplateEnv, installDirsTemplateEnv )
@@ -674,7 +674,7 @@ postInstallActions verbosity
   when (reportingLevel == DetailedReports) $
     storeDetailedBuildReports verbosity logsDir buildReports
 
-  regenerateHaddockIndex verbosity packageDBs comp platform conf
+  regenerateHaddockIndex verbosity packageDBs comp platform conf useSandbox
                          configFlags installFlags installPlan
 
   symlinkBinaries verbosity configFlags installFlags installPlan
@@ -728,11 +728,12 @@ regenerateHaddockIndex :: Verbosity
                        -> Compiler
                        -> Platform
                        -> ProgramConfiguration
+                       -> UseSandbox
                        -> ConfigFlags
                        -> InstallFlags
                        -> InstallPlan
                        -> IO ()
-regenerateHaddockIndex verbosity packageDBs comp platform conf
+regenerateHaddockIndex verbosity packageDBs comp platform conf useSandbox
                        configFlags installFlags installPlan
   | haddockIndexFileIsRequested && shouldRegenerateHaddockIndex = do
 
@@ -757,9 +758,10 @@ regenerateHaddockIndex verbosity packageDBs comp platform conf
       && isJust (flagToMaybe (installHaddockIndex installFlags))
 
     -- We want to regenerate the index if some new documentation was actually
-    -- installed. Since the index is per-user, we don't do it for global
-    -- installs or special cases where we're installing into a specific db.
-    shouldRegenerateHaddockIndex = normalUserInstall
+    -- installed. Since the index can be only per-user or per-sandbox (see
+    -- #1337), we don't do it for global installs or special cases where we're
+    -- installing into a specific db.
+    shouldRegenerateHaddockIndex = (isUseSandbox useSandbox || normalUserInstall)
                                 && someDocsWereInstalled installPlan
       where
         someDocsWereInstalled = any installedDocs . InstallPlan.toList
@@ -1350,7 +1352,7 @@ installUnpackedPackage verbosity buildLimit installLock numJobs
                 Cabal.regGenPkgConf = toFlag (Just pkgConfFile)
               }
           setup Cabal.registerCommand registerFlags' mLogPath
-          withFileContents pkgConfFile $ \pkgConfText ->
+          withUTF8FileContents pkgConfFile $ \pkgConfText ->
             case Installed.parseInstalledPackageInfo pkgConfText of
               Installed.ParseFailed perror    -> pkgConfParseFailed perror
               Installed.ParseOk warns pkgConf -> do

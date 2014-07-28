@@ -358,6 +358,7 @@ testSuiteLibV09AsLibAndExe pkg_descr lbi
     bi  = testBuildInfo test
     lib = Library {
             exposedModules = [ m ],
+            reexportedModules = [],
             libExposed     = True,
             libBuildInfo   = bi
           }
