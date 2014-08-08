@@ -930,6 +930,7 @@ data RegisterFlags = RegisterFlags {
     regGenPkgConf  :: Flag (Maybe FilePath),
     regInPlace     :: Flag Bool,
     regDistPref    :: Flag FilePath,
+    regPrintId     :: Flag Bool,
     regVerbosity   :: Flag Verbosity
   }
   deriving Show
@@ -941,6 +942,7 @@ defaultRegisterFlags = RegisterFlags {
     regGenPkgConf  = NoFlag,
     regInPlace     = Flag False,
     regDistPref    = Flag defaultDistPref,
+    regPrintId     = Flag False,
     regVerbosity   = Flag normal
   }
 
@@ -978,6 +980,11 @@ registerCommand = makeCommand name shortDesc longDesc
          "instead of registering, generate a package registration file"
          regGenPkgConf (\v flags -> flags { regGenPkgConf  = v })
          (optArg' "PKG" Flag flagToList)
+
+      ,option "" ["print-ipid"]
+         "print the installed package ID calculated for this package"
+         regPrintId (\v flags -> flags { regPrintId = v })
+         trueArg
       ]
 
 unregisterCommand :: CommandUI RegisterFlags
@@ -1015,6 +1022,7 @@ instance Monoid RegisterFlags where
     regGenScript   = mempty,
     regGenPkgConf  = mempty,
     regInPlace     = mempty,
+    regPrintId     = mempty,
     regDistPref    = mempty,
     regVerbosity   = mempty
   }
@@ -1023,6 +1031,7 @@ instance Monoid RegisterFlags where
     regGenScript   = combine regGenScript,
     regGenPkgConf  = combine regGenPkgConf,
     regInPlace     = combine regInPlace,
+    regPrintId     = combine regPrintId,
     regDistPref    = combine regDistPref,
     regVerbosity   = combine regVerbosity
   }
