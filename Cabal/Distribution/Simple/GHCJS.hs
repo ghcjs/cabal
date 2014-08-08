@@ -37,7 +37,7 @@ import Distribution.Simple.InstallDirs hiding ( absoluteInstallDirs )
 import Distribution.Simple.BuildPaths
 import Distribution.Simple.Utils
 import Distribution.Package
-         ( Package(..), PackageName(..) )
+         ( PackageName(..) )
 import qualified Distribution.ModuleName as ModuleName
 import Distribution.Simple.Program
          ( Program(..), ConfiguredProgram(..), ProgramConfiguration
@@ -336,7 +336,6 @@ buildOrReplLib forRepl verbosity numJobsFlag pkg_descr lbi lib clbi = do
              _  -> die "Multiple library names found when building library"
   let libTargetDir = buildDir lbi
       numJobs = fromMaybe 1 $ fromFlagOrDefault Nothing numJobsFlag
-      pkgid = packageId pkg_descr
       whenVanillaLib forceVanilla =
         when (not forRepl && (forceVanilla || withVanillaLib lbi))
       whenProfLib = when (not forRepl && withProfLib lbi)
@@ -367,7 +366,7 @@ buildOrReplLib forRepl verbosity numJobsFlag pkg_descr lbi lib clbi = do
       vanillaOpts = baseOpts `mappend` mempty {
                       ghcOptMode         = toFlag GhcModeMake,
                       ghcOptNumJobs      = toFlag numJobs,
-                      ghcOptPackageName  = toFlag pkgid,
+                      ghcOptPackageKey   = toFlag (pkgKey lbi),
                       ghcOptInputModules = libModules lib
                     }
 
@@ -502,7 +501,7 @@ buildOrReplLib forRepl verbosity numJobsFlag pkg_descr lbi lib clbi = do
                 ghcOptDynLinkMode        = toFlag GhcDynamicOnly,
                 ghcOptInputFiles         = dynamicObjectFiles,
                 ghcOptOutputFile         = toFlag sharedLibFilePath,
-                ghcOptPackageName        = toFlag pkgid,
+                ghcOptPackageKey         = toFlag (pkgKey lbi),
                 ghcOptNoAutoLinkPackages = toFlag True,
                 ghcOptPackageDBs         = withPackageDB lbi,
                 ghcOptPackages           = componentPackageDeps clbi,
@@ -778,7 +777,7 @@ installExe verbosity lbi installDirs buildPref
 
 libAbiHash :: Verbosity -> PackageDescription -> LocalBuildInfo
            -> Library -> ComponentLocalBuildInfo -> IO String
-libAbiHash verbosity pkg_descr lbi lib clbi = do
+libAbiHash verbosity _pkg_descr lbi lib clbi = do
   let
       libBi       = libBuildInfo lib
       comp        = compiler lbi
@@ -787,7 +786,7 @@ libAbiHash verbosity pkg_descr lbi lib clbi = do
         (componentGhcOptions verbosity lbi libBi clbi (buildDir lbi))
         `mappend` mempty {
           ghcOptMode         = toFlag GhcModeAbiHash,
-          ghcOptPackageName  = toFlag (packageId pkg_descr),
+          ghcOptPackageKey   = toFlag (pkgKey lbi),
           ghcOptInputModules = exposedModules lib
         }
       profArgs = adjustExts "js_p_hi" "js_p_o" vanillaArgs `mappend` mempty {
