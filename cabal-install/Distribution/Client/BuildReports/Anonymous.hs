@@ -26,8 +26,6 @@ module Distribution.Client.BuildReports.Anonymous (
 --    showList,
   ) where
 
-import Distribution.Client.Types
-         ( ConfiguredPackage(..) )
 import qualified Distribution.Client.Types as BR
          ( BuildResult, BuildFailure(..), BuildSuccess(..)
          , DocsResult(..), TestsResult(..) )
@@ -36,7 +34,7 @@ import Distribution.Client.Utils
 import qualified Paths_cabal_install (version)
 
 import Distribution.Package
-         ( PackageIdentifier(..), PackageName(..), Package(packageId) )
+         ( PackageIdentifier(..), PackageName(..) )
 import Distribution.PackageDescription
          ( FlagName(..), FlagAssignment )
 --import Distribution.Version
@@ -106,7 +104,8 @@ data BuildReport
   }
 
 data InstallOutcome
-   = DependencyFailed PackageIdentifier
+   = PlanningFailed
+   | DependencyFailed PackageIdentifier
    | DownloadFailed
    | UnpackFailed
    | SetupFailed
@@ -120,12 +119,11 @@ data InstallOutcome
 data Outcome = NotTried | Failed | Ok
   deriving Eq
 
-new :: OS -> Arch -> CompilerId -- -> Version
-    -> ConfiguredPackage -> BR.BuildResult
-    -> BuildReport
-new os' arch' comp (ConfiguredPackage pkg flags _ deps) result =
+new :: OS -> Arch -> CompilerId -> PackageIdentifier -> FlagAssignment
+    -> [PackageIdentifier] -> BR.BuildResult -> BuildReport
+new os' arch' comp pkgid flags deps result =
   BuildReport {
-    package               = packageId pkg,
+    package               = pkgid,
     os                    = os',
     arch                  = arch',
     compiler              = comp,
@@ -139,6 +137,7 @@ new os' arch' comp (ConfiguredPackage pkg flags _ deps) result =
   }
   where
     convertInstallOutcome = case result of
+      Left  BR.PlanningFailed      -> PlanningFailed
       Left  (BR.DependentFailed p) -> DependencyFailed p
       Left  (BR.DownloadFailed  _) -> DownloadFailed
       Left  (BR.UnpackFailed    _) -> UnpackFailed
@@ -276,6 +275,7 @@ parseFlag = do
     flag       -> return (FlagName flag, True)
 
 instance Text.Text InstallOutcome where
+  disp PlanningFailed  = Disp.text "PlanningFailed"
   disp (DependencyFailed pkgid) = Disp.text "DependencyFailed" <+> Text.disp pkgid
   disp DownloadFailed  = Disp.text "DownloadFailed"
   disp UnpackFailed    = Disp.text "UnpackFailed"
@@ -289,6 +289,7 @@ instance Text.Text InstallOutcome where
   parse = do
     name <- Parse.munch1 Char.isAlphaNum
     case name of
+      "PlanningFailed"   -> return PlanningFailed
       "DependencyFailed" -> do Parse.skipSpaces
                                pkgid <- Text.parse
                                return (DependencyFailed pkgid)

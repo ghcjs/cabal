@@ -354,13 +354,14 @@ configureExOptions _showOrParseArgs =
   , optionSolver configSolver (\v flags -> flags { configSolver = v })
 
   , option [] ["allow-newer"]
-    "Ignore upper bounds in dependencies on some or all packages."
+    ("Ignore upper bounds in all dependencies or " ++ allowNewerArgument)
     configAllowNewer (\v flags -> flags { configAllowNewer = v})
-    (optArg "PKGS"
+    (optArg allowNewerArgument
      (fmap Flag allowNewerParser) (Flag AllowNewerAll)
      allowNewerPrinter)
 
   ]
+  where allowNewerArgument = "DEPS"
 
 instance Monoid ConfigExFlags where
   mempty = ConfigExFlags {
@@ -975,6 +976,7 @@ data InstallFlags = InstallFlags {
     installSummaryFile      :: [PathTemplate],
     installLogFile          :: Flag PathTemplate,
     installBuildReports     :: Flag ReportLevel,
+    installReportPlanningFailure :: Flag Bool,
     installSymlinkBinDir    :: Flag FilePath,
     installOneShot          :: Flag Bool,
     installNumJobs          :: Flag (Maybe Int),
@@ -1001,6 +1003,7 @@ defaultInstallFlags = InstallFlags {
     installSummaryFile     = mempty,
     installLogFile         = mempty,
     installBuildReports    = Flag NoReports,
+    installReportPlanningFailure = Flag False,
     installSymlinkBinDir   = mempty,
     installOneShot         = Flag False,
     installNumJobs         = mempty,
@@ -1179,6 +1182,11 @@ installOptions showOrParseArgs =
                                       (toFlag `fmap` parse))
                           (flagToList . fmap display))
 
+      , option [] ["report-planning-failure"]
+          "Generate build reports when the dependency solver fails. This is used by the Hackage build bot."
+          installReportPlanningFailure (\v flags -> flags { installReportPlanningFailure = v })
+          trueArg
+
       , option [] ["one-shot"]
           "Do not record the packages in the world file."
           installOneShot (\v flags -> flags { installOneShot = v })
@@ -1222,6 +1230,7 @@ instance Monoid InstallFlags where
     installSummaryFile     = mempty,
     installLogFile         = mempty,
     installBuildReports    = mempty,
+    installReportPlanningFailure = mempty,
     installSymlinkBinDir   = mempty,
     installOneShot         = mempty,
     installNumJobs         = mempty,
@@ -1246,6 +1255,7 @@ instance Monoid InstallFlags where
     installSummaryFile     = combine installSummaryFile,
     installLogFile         = combine installLogFile,
     installBuildReports    = combine installBuildReports,
+    installReportPlanningFailure = combine installReportPlanningFailure,
     installSymlinkBinDir   = combine installSymlinkBinDir,
     installOneShot         = combine installOneShot,
     installNumJobs         = combine installNumJobs,
