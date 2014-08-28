@@ -41,7 +41,6 @@ Flag old-directory
 Flag network-uri
   description:  Get Network.URI from the network-uri package
   default:      True
-  manual:       True
 
 executable cabal
     main-is:        Main.hs
