@@ -51,10 +51,15 @@ postBuildReport uri buildReport = do
   }
   case rspCode response of
     (3,0,3) | [Just buildId] <- [ do rel <- parseRelativeReference location
+-- Caution MIN_VERSION_network_uri and MIN_VERSION_network won't both be defined
+#if defined(MIN_VERSION_network_uri)
+                                     return $ relativeTo rel uri
+#else
 #if MIN_VERSION_network(2,4,0)
                                      return $ relativeTo rel uri
 #else
                                      relativeTo rel uri
+#endif
 #endif
                                   | Header HdrLocation location <- rspHeaders response ]
               -> return $ buildId
