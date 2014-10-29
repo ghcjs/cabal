@@ -11,6 +11,7 @@
 -- Extra utils related to the package indexes.
 -----------------------------------------------------------------------------
 module Distribution.Client.IndexUtils (
+  getIndexFileAge,
   getInstalledPackages,
   getSourcePackages,
   getSourcePackagesStrict,
@@ -20,6 +21,7 @@ module Distribution.Client.IndexUtils (
   parsePackageIndex,
   readRepoIndex,
   updateRepoIndexCache,
+  updatePackageIndexCacheFile,
 
   BuildTreeRefType(..), refTypeFromTypeCode, typeCodeFromRefType
   ) where
@@ -33,6 +35,7 @@ import Distribution.Package
          , Dependency(Dependency), InstalledPackageId(..) )
 import Distribution.Client.PackageIndex (PackageIndex)
 import qualified Distribution.Client.PackageIndex      as PackageIndex
+import Distribution.Simple.PackageIndex (InstalledPackageIndex)
 import qualified Distribution.Simple.PackageIndex      as InstalledPackageIndex
 import qualified Distribution.InstalledPackageInfo     as InstalledPackageInfo
 import qualified Distribution.PackageDescription.Parse as PackageDesc.Parse
@@ -80,18 +83,19 @@ import System.FilePath.Posix as FilePath.Posix
 import System.IO
 import System.IO.Unsafe (unsafeInterleaveIO)
 import System.IO.Error (isDoesNotExistError)
+import Numeric (showFFloat)
 
 
 getInstalledPackages :: Verbosity -> Compiler
                      -> PackageDBStack -> ProgramConfiguration
-                     -> IO InstalledPackageIndex.PackageIndex
+                     -> IO InstalledPackageIndex
 getInstalledPackages verbosity comp packageDbs conf =
     Configure.getInstalledPackages verbosity' comp packageDbs conf
   where
     --FIXME: make getInstalledPackages use sensible verbosity in the first place
     verbosity'  = lessVerbose verbosity
 
-convert :: InstalledPackageIndex.PackageIndex -> PackageIndex InstalledPackage
+convert :: InstalledPackageIndex -> PackageIndex InstalledPackage
 convert index' = PackageIndex.fromList
     -- There can be multiple installed instances of each package version,
     -- like when the same package is installed in the global & user DBs.
@@ -179,10 +183,9 @@ readRepoIndex verbosity repo mode =
   let indexFile = repoLocalDir repo </> "00-index.tar"
       cacheFile = repoLocalDir repo </> "00-index.cache"
   in handleNotFound $ do
-    warnIfIndexIsOld indexFile
+    warnIfIndexIsOld =<< getIndexFileAge repo
     whenCacheOutOfDate indexFile cacheFile $ do
-      info verbosity "Updating the index cache file..."
-      updatePackageIndexCacheFile indexFile cacheFile
+      updatePackageIndexCacheFile verbosity indexFile cacheFile
     readPackageIndexCacheFile mkAvailablePackage indexFile cacheFile mode
 
   where
@@ -213,14 +216,19 @@ readRepoIndex verbosity repo mode =
       else ioError e
 
     isOldThreshold = 15 --days
-    warnIfIndexIsOld indexFile = do
-      dt <- getFileAge indexFile
+    warnIfIndexIsOld dt = do
       when (dt >= isOldThreshold) $ case repoKind repo of
         Left  remoteRepo -> warn verbosity $
              "The package list for '" ++ remoteRepoName remoteRepo
-          ++ "' is " ++ show dt ++ " days old.\nRun "
+          ++ "' is " ++ showFFloat (Just 1) dt " days old.\nRun "
           ++ "'cabal update' to get the latest list of available packages."
         Right _localRepo -> return ()
+
+
+-- | Return the age of the index file in days (as a Double).
+getIndexFileAge :: Repo -> IO Double
+getIndexFileAge repo = getFileAge $ repoLocalDir repo </> "00-index.tar"
+
 
 -- | It is not necessary to call this, as the cache will be updated when the
 -- index is read normally. However you can do the work earlier if you like.
@@ -228,8 +236,7 @@ readRepoIndex verbosity repo mode =
 updateRepoIndexCache :: Verbosity -> Repo -> IO ()
 updateRepoIndexCache verbosity repo =
     whenCacheOutOfDate indexFile cacheFile $ do
-      info verbosity "Updating the index cache file..."
-      updatePackageIndexCacheFile indexFile cacheFile
+      updatePackageIndexCacheFile verbosity indexFile cacheFile
   where
     indexFile = repoLocalDir repo </> "00-index.tar"
     cacheFile = repoLocalDir repo </> "00-index.cache"
@@ -380,8 +387,9 @@ parsePreferredVersions = mapMaybe simpleParse
 -- Reading and updating the index cache
 --
 
-updatePackageIndexCacheFile :: FilePath -> FilePath -> IO ()
-updatePackageIndexCacheFile indexFile cacheFile = do
+updatePackageIndexCacheFile :: Verbosity -> FilePath -> FilePath -> IO ()
+updatePackageIndexCacheFile verbosity indexFile cacheFile = do
+    info verbosity "Updating the index cache file..."
     (mkPkgs, prefs) <- either fail return
                        . parsePackageIndex
                        . maybeDecompress

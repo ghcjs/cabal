@@ -28,7 +28,7 @@ import Distribution.InstalledPackageInfo
          ( InstalledPackageInfo )
 import qualified Distribution.InstalledPackageInfo as InstalledPackageInfo
                                 ( InstalledPackageInfo_(..) )
-import Distribution.Simple.PackageIndex (PackageIndex)
+import Distribution.Simple.PackageIndex (PackageIndex, InstalledPackageIndex)
 import qualified Distribution.Simple.PackageIndex as PackageIndex
 import Distribution.Simple.LocalBuildInfo
          ( LocalBuildInfo(..), ComponentLocalBuildInfo(..)
@@ -68,6 +68,8 @@ import Distribution.Version
 import Distribution.System
          ( Platform(..), OS(..), buildOS, platformFromTriple )
 import Distribution.Verbosity
+import Distribution.Utils.NubList
+         ( NubListR, overNubListR, toNubListR )
 import Distribution.Text ( display )
 import Language.Haskell.Extension (Language(..), Extension(..)
                                   ,KnownExtension(..))
@@ -227,16 +229,16 @@ guessToolFromGhcjsPath tool ghcjsProg verbosity searchpath
 
 -- | Given a single package DB, return all installed packages.
 getPackageDBContents :: Verbosity -> PackageDB -> ProgramConfiguration
-                     -> IO PackageIndex
+                     -> IO InstalledPackageIndex
 getPackageDBContents verbosity packagedb conf = do
   pkgss <- getInstalledPackages' verbosity [packagedb] conf
   toPackageIndex verbosity pkgss conf
 
 -- | Given a package DB stack, return all installed packages.
 getInstalledPackages :: Verbosity -> PackageDBStack -> ProgramConfiguration
-                     -> IO PackageIndex
+                     -> IO InstalledPackageIndex
 getInstalledPackages verbosity packagedbs conf = do
---  checkPackageDbEnvVar -- fixme drop support for GHCJS_PACKAGE_PATH in ghcjs-pkg
+  -- checkPackageDbEnvVar -- fixme drop support for GHCJS_PACKAGE_PATH in ghcjs-pkg
   checkPackageDbStack packagedbs
   pkgss <- getInstalledPackages' verbosity packagedbs conf
   index <- toPackageIndex verbosity pkgss conf
@@ -245,7 +247,7 @@ getInstalledPackages verbosity packagedbs conf = do
 toPackageIndex :: Verbosity
                -> [(PackageDB, [InstalledPackageInfo])]
                -> ProgramConfiguration
-               -> IO PackageIndex
+               -> IO InstalledPackageIndex
 toPackageIndex verbosity pkgss conf = do
   -- On Windows, various fields have $topdir/foo rather than full
   -- paths. We need to substitute the right value in so that when
@@ -367,27 +369,31 @@ buildOrReplLib forRepl verbosity numJobsFlag pkg_descr lbi lib clbi = do
                       ghcOptMode         = toFlag GhcModeMake,
                       ghcOptNumJobs      = toFlag numJobs,
                       ghcOptPackageKey   = toFlag (pkgKey lbi),
-                      ghcOptInputModules = libModules lib
+                      ghcOptInputModules = toNubListR $ libModules lib
                     }
 
       profOpts    = adjustExts "p_hi" "p_o" vanillaOpts `mappend` mempty {
                         ghcOptProfilingMode = toFlag True,
-                        ghcOptExtra         = ghcjsProfOptions libBi
+                        ghcOptExtra         = toNubListR $
+                                              ghcjsProfOptions libBi
                       }
       sharedOpts  = adjustExts "dyn_hi" "dyn_o" vanillaOpts `mappend` mempty {
                         ghcOptDynLinkMode = toFlag GhcDynamicOnly,
                         ghcOptFPic        = toFlag True,
-                        ghcOptExtra       = ghcjsSharedOptions libBi
+                        ghcOptExtra       = toNubListR $
+                                            ghcjsSharedOptions libBi
                       }
       linkerOpts = mempty {
-                      ghcOptLinkOptions    = PD.ldOptions libBi,
-                      ghcOptLinkLibs       = extraLibs libBi,
-                      ghcOptLinkLibPath    = extraLibDirs libBi,
-                      ghcOptLinkFrameworks = PD.frameworks libBi,
-                      ghcOptInputFiles     = [libTargetDir </> x | x <- cObjs]
+                      ghcOptLinkOptions    = toNubListR $ PD.ldOptions libBi,
+                      ghcOptLinkLibs       = toNubListR $ extraLibs libBi,
+                      ghcOptLinkLibPath    = toNubListR $ extraLibDirs libBi,
+                      ghcOptLinkFrameworks = toNubListR $ PD.frameworks libBi,
+                      ghcOptInputFiles     = toNubListR
+                                             [libTargetDir </> x | x <- cObjs]
                    }
       replOpts    = vanillaOpts {
-                      ghcOptExtra        = Internal.filterGhciFlags
+                      ghcOptExtra        = overNubListR
+                                           Internal.filterGhciFlags
                                            (ghcOptExtra vanillaOpts),
                       ghcOptNumJobs      = mempty
                     }
@@ -499,14 +505,15 @@ buildOrReplLib forRepl verbosity numJobsFlag pkg_descr lbi lib clbi = do
               mempty {
                 ghcOptShared             = toFlag True,
                 ghcOptDynLinkMode        = toFlag GhcDynamicOnly,
-                ghcOptInputFiles         = dynamicObjectFiles,
+                ghcOptInputFiles         = toNubListR dynamicObjectFiles,
                 ghcOptOutputFile         = toFlag sharedLibFilePath,
                 ghcOptPackageKey         = toFlag (pkgKey lbi),
                 ghcOptNoAutoLinkPackages = toFlag True,
                 ghcOptPackageDBs         = withPackageDB lbi,
-                ghcOptPackages           = componentPackageDeps clbi,
-                ghcOptLinkLibs           = extraLibs libBi,
-                ghcOptLinkLibPath        = extraLibDirs libBi
+                ghcOptPackages           = toNubListR $
+                                           Internal.mkGhcOptPackages clbi,
+                ghcOptLinkLibs           = toNubListR $ extraLibs libBi,
+                ghcOptLinkLibPath        = toNubListR $ extraLibDirs libBi
               }
 
       whenVanillaLib False $ do
@@ -581,9 +588,9 @@ buildOrReplExe forRepl verbosity numJobsFlag _pkg_descr lbi
       baseOpts   = (componentGhcOptions verbosity lbi exeBi clbi exeDir)
                     `mappend` mempty {
                       ghcOptMode         = toFlag GhcModeMake,
-                      ghcOptInputFiles   =
+                      ghcOptInputFiles   = toNubListR $
                         [ srcMainFile | isHaskellMain],
-                      ghcOptInputModules =
+                      ghcOptInputModules = toNubListR $
                         [ m | not isHaskellMain, m <- exeModules exe]
                     }
       staticOpts = baseOpts `mappend` mempty {
@@ -591,24 +598,27 @@ buildOrReplExe forRepl verbosity numJobsFlag _pkg_descr lbi
                    }
       profOpts   = adjustExts "p_hi" "p_o" baseOpts `mappend` mempty {
                       ghcOptProfilingMode  = toFlag True,
-                      ghcOptExtra          = ghcjsProfOptions exeBi
+                      ghcOptExtra          = toNubListR $ ghcjsProfOptions exeBi
                     }
       dynOpts    = adjustExts "dyn_hi" "dyn_o" baseOpts `mappend` mempty {
                       ghcOptDynLinkMode    = toFlag GhcDynamicOnly,
-                      ghcOptExtra          = ghcjsSharedOptions exeBi
+                      ghcOptExtra          = toNubListR $
+                                             ghcjsSharedOptions exeBi
                     }
       dynTooOpts = adjustExts "dyn_hi" "dyn_o" staticOpts `mappend` mempty {
                       ghcOptDynLinkMode    = toFlag GhcStaticAndDynamic
                     }
       linkerOpts = mempty {
-                      ghcOptLinkOptions    = PD.ldOptions exeBi,
-                      ghcOptLinkLibs       = extraLibs exeBi,
-                      ghcOptLinkLibPath    = extraLibDirs exeBi,
-                      ghcOptLinkFrameworks = PD.frameworks exeBi,
-                      ghcOptInputFiles     = [exeDir </> x | x <- cObjs] ++ jsSrcs
+                      ghcOptLinkOptions    = toNubListR $ PD.ldOptions exeBi,
+                      ghcOptLinkLibs       = toNubListR $ extraLibs exeBi,
+                      ghcOptLinkLibPath    = toNubListR $ extraLibDirs exeBi,
+                      ghcOptLinkFrameworks = toNubListR $ PD.frameworks exeBi,
+                      ghcOptInputFiles     = toNubListR $
+                                             [exeDir </> x | x <- cObjs] ++ jsSrcs
                    }
       replOpts   = baseOpts {
-                      ghcOptExtra          = Internal.filterGhciFlags
+                      ghcOptExtra          = overNubListR
+                                             Internal.filterGhciFlags
                                              (ghcOptExtra baseOpts)
                    }
                    -- For a normal compile we do separate invocations of ghc for
@@ -787,11 +797,11 @@ libAbiHash verbosity _pkg_descr lbi lib clbi = do
         `mappend` mempty {
           ghcOptMode         = toFlag GhcModeAbiHash,
           ghcOptPackageKey   = toFlag (pkgKey lbi),
-          ghcOptInputModules = exposedModules lib
+          ghcOptInputModules = toNubListR $ exposedModules lib
         }
       profArgs = adjustExts "js_p_hi" "js_p_o" vanillaArgs `mappend` mempty {
                      ghcOptProfilingMode = toFlag True,
-                     ghcOptExtra         = ghcjsProfOptions libBi
+                     ghcOptExtra         = toNubListR (ghcjsProfOptions libBi)
                  }
       ghcArgs = if withVanillaLib lbi then vanillaArgs
            else if withProfLib    lbi then profArgs
@@ -824,7 +834,8 @@ componentGhcOptions :: Verbosity -> LocalBuildInfo
                     -> GhcOptions
 componentGhcOptions verbosity lbi bi clbi odir =
   let opts = Internal.componentGhcOptions verbosity lbi bi clbi odir
-  in  opts { ghcOptExtra = ghcOptExtra opts `mappend` hcOptions GHCJS bi
+  in  opts { ghcOptExtra = ghcOptExtra opts `mappend` toNubListR
+                             (hcOptions GHCJS bi)
            }
 
 ghcjsProfOptions :: BuildInfo -> [String]

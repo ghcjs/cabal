@@ -98,12 +98,12 @@ import System.FilePath (splitExtension, dropExtensions, (</>), (<.>),
 --
 -- The reason for splitting it up this way is that some pre-processors don't
 -- simply generate one output .hs file from one input file but have
--- dependencies on other genereated files (notably c2hs, where building one
+-- dependencies on other generated files (notably c2hs, where building one
 -- .hs file may require reading other .chi files, and then compiling the .hs
 -- file may require reading a generated .h file). In these cases the generated
 -- files need to embed relative path names to each other (eg the generated .hs
 -- file mentions the .h file in the FFI imports). This path must be relative to
--- the base directory where the genereated files are located, it cannot be
+-- the base directory where the generated files are located, it cannot be
 -- relative to the top level of the build tree because the compilers do not
 -- look for .h files relative to there, ie we do not use \"-I .\", instead we
 -- use \"-I dist\/build\" (or whatever dist dir has been set by the user)
@@ -193,11 +193,9 @@ preprocessComponent pd comp lbi isSrcDist verbosity handlers = case comp of
       BenchmarkUnsupported tt -> die $ "No support for preprocessing benchmark "
                                  ++ "type " ++ display tt
   where
-    builtinHaskellSuffixes
-      | NHC == compilerFlavor (compiler lbi) = ["hs", "lhs", "gc"]
-      | otherwise                            = ["hs", "lhs"]
-    builtinCSuffixes = cSourceExtensions
-    builtinSuffixes = builtinHaskellSuffixes ++ builtinCSuffixes
+    builtinHaskellSuffixes = ["hs", "lhs"]
+    builtinCSuffixes       = cSourceExtensions
+    builtinSuffixes        = builtinHaskellSuffixes ++ builtinCSuffixes
     localHandlers bi = [(ext, h bi lbi) | (ext, h) <- handlers]
     pre dirs dir lhndlrs fp =
       preprocessFile dirs dir isSrcDist fp verbosity builtinSuffixes lhndlrs
@@ -515,8 +513,6 @@ platformDefines lbi =
       map (\os'   -> "-D" ++ os'   ++ "_HOST_OS=1")   osStr ++
       map (\arch' -> "-D" ++ arch' ++ "_HOST_ARCH=1") archStr
     JHC  -> ["-D__JHC__=" ++ versionInt version]
-    NHC  -> ["-D__NHC__=" ++ versionInt version]
-    Hugs -> ["-D__HUGS__"]
     HaskellSuite {} ->
       ["-D__HASKELL_SUITE__"] ++
         map (\os'   -> "-D" ++ os'   ++ "_HOST_OS=1")   osStr ++

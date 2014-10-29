@@ -1,3 +1,5 @@
+{-# LANGUAGE DeriveGeneric #-}
+
 -----------------------------------------------------------------------------
 -- |
 -- Module      :  Distribution.Simple.LocalBuildInfo
@@ -63,24 +65,31 @@ import Distribution.Simple.Program (ProgramConfiguration)
 import Distribution.PackageDescription
          ( PackageDescription(..), withLib, Library(libBuildInfo), withExe
          , Executable(exeName, buildInfo), withTest, TestSuite(..)
-         , BuildInfo(buildable), Benchmark(..) )
+         , BuildInfo(buildable), Benchmark(..), ModuleRenaming(..) )
+import qualified Distribution.InstalledPackageInfo as Installed
+    ( ModuleReexport(..) )
 import Distribution.Package
-         ( PackageId, Package(..), InstalledPackageId(..), PackageKey )
+         ( PackageId, Package(..), InstalledPackageId(..), PackageKey
+         , PackageName )
 import Distribution.Simple.Compiler
          ( Compiler(..), PackageDBStack, OptimisationLevel )
 import Distribution.Simple.PackageIndex
-         ( PackageIndex )
+         ( InstalledPackageIndex )
 import Distribution.Simple.Setup
          ( ConfigFlags )
 import Distribution.Text
          ( display )
 import Distribution.System
           ( Platform )
-import Data.List (nub, find)
-import Data.Graph
-import Data.Tree  (flatten)
+
 import Data.Array ((!))
+import Data.Binary (Binary)
+import Data.Graph
+import Data.List (nub, find)
 import Data.Maybe
+import Data.Tree  (flatten)
+import GHC.Generics (Generic)
+import Data.Map (Map)
 
 -- | Data cached after configuration step.  See also
 -- 'Distribution.Simple.Setup.ConfigFlags'.
@@ -101,13 +110,10 @@ data LocalBuildInfo = LocalBuildInfo {
                 -- ^ The platform we're building for
         buildDir      :: FilePath,
                 -- ^ Where to build the package.
-        --TODO: eliminate hugs's scratchDir, use builddir
-        scratchDir    :: FilePath,
-                -- ^ Where to put the result of the Hugs build.
         componentsConfigs   :: [(ComponentName, ComponentLocalBuildInfo, [ComponentName])],
                 -- ^ All the components to build, ordered by topological sort, and with their dependencies
                 -- over the intrapackage dependency graph
-        installedPkgs :: PackageIndex,
+        installedPkgs :: InstalledPackageIndex,
                 -- ^ All the info about the installed packages that the
                 -- current package depends on (directly or indirectly).
         pkgDescrFile  :: Maybe FilePath,
@@ -132,7 +138,9 @@ data LocalBuildInfo = LocalBuildInfo {
         stripLibs     :: Bool,  -- ^Whether to strip libraries during install
         progPrefix    :: PathTemplate, -- ^Prefix to be prepended to installed executables
         progSuffix    :: PathTemplate -- ^Suffix to be appended to installed executables
-  } deriving (Read, Show)
+  } deriving (Generic, Read, Show)
+
+instance Binary LocalBuildInfo
 
 -- | External package dependencies for the package as a whole. This is the
 -- union of the individual 'componentPackageDeps', less any internal deps.
@@ -167,7 +175,9 @@ data ComponentName = CLibName   -- currently only a single lib
                    | CExeName   String
                    | CTestName  String
                    | CBenchName String
-                   deriving (Show, Eq, Ord, Read)
+                   deriving (Eq, Generic, Ord, Read, Show)
+
+instance Binary ComponentName
 
 showComponentName :: ComponentName -> String
 showComponentName CLibName          = "library"
@@ -182,18 +192,25 @@ data ComponentLocalBuildInfo
     -- satisfied in terms of version ranges. This field fixes those dependencies
     -- to the specific versions available on this machine for this compiler.
     componentPackageDeps :: [(InstalledPackageId, PackageId)],
+    componentModuleReexports :: [Installed.ModuleReexport],
+    componentPackageRenaming :: Map PackageName ModuleRenaming,
     componentLibraries :: [LibraryName]
   }
   | ExeComponentLocalBuildInfo {
-    componentPackageDeps :: [(InstalledPackageId, PackageId)]
+    componentPackageDeps :: [(InstalledPackageId, PackageId)],
+    componentPackageRenaming :: Map PackageName ModuleRenaming
   }
   | TestComponentLocalBuildInfo {
-    componentPackageDeps :: [(InstalledPackageId, PackageId)]
+    componentPackageDeps :: [(InstalledPackageId, PackageId)],
+    componentPackageRenaming :: Map PackageName ModuleRenaming
   }
   | BenchComponentLocalBuildInfo {
-    componentPackageDeps :: [(InstalledPackageId, PackageId)]
+    componentPackageDeps :: [(InstalledPackageId, PackageId)],
+    componentPackageRenaming :: Map PackageName ModuleRenaming
   }
-  deriving (Read, Show)
+  deriving (Generic, Read, Show)
+
+instance Binary ComponentLocalBuildInfo
 
 foldComponent :: (Library -> a)
               -> (Executable -> a)
@@ -207,7 +224,9 @@ foldComponent _ _ f _ (CTest  tst) = f tst
 foldComponent _ _ _ f (CBench bch) = f bch
 
 data LibraryName = LibraryName String
-    deriving (Read, Show)
+    deriving (Generic, Read, Show)
+
+instance Binary LibraryName
 
 componentBuildInfo :: Component -> BuildInfo
 componentBuildInfo =

@@ -1,3 +1,5 @@
+{-# LANGUAGE DeriveGeneric #-}
+
 -----------------------------------------------------------------------------
 -- |
 -- Module      :  Distribution.Simple.Program.Db
@@ -48,6 +50,7 @@ module Distribution.Simple.Program.Db (
     -- ** Query and manipulate the program db
     configureProgram,
     configureAllKnownPrograms,
+    lookupProgramVersion,
     reconfigurePrograms,
     requireProgram,
     requireProgramVersion,
@@ -70,6 +73,8 @@ import Distribution.Text
 import Distribution.Verbosity
          ( Verbosity )
 
+import Data.Binary (Binary(..))
+import Data.Functor ((<$>))
 import Data.List
          ( foldl' )
 import Data.Maybe
@@ -131,6 +136,12 @@ instance Read ProgramDb where
   readsPrec p s =
     [ (emptyProgramDb { configuredProgs = Map.fromList s' }, r)
     | (s', r) <- readsPrec p s ]
+
+instance Binary ProgramDb where
+  put = put . configuredProgs
+  get = do
+      progs <- get
+      return $! emptyProgramDb { configuredProgs = progs }
 
 
 -- | The Read\/Show instance does not preserve all the unconfigured 'Programs'
@@ -295,7 +306,7 @@ configuredPrograms = Map.elems . configuredProgs
 --
 -- The reason for it not being a failure at this stage is that we don't know up
 -- front all the programs we will need, so we try to configure them all.
--- To verify that a program was actually sucessfully configured use
+-- To verify that a program was actually successfully configured use
 -- 'requireProgram'.
 --
 configureProgram :: Verbosity
@@ -328,6 +339,7 @@ configureProgram verbosity prog conf = do
             programDefaultArgs  = [],
             programOverrideArgs = userSpecifiedArgs prog conf,
             programOverrideEnv  = [("PATH", Just newPath)],
+            programProperties   = Map.empty,
             programLocation     = location
           }
       configuredProg' <- programPostConf prog verbosity configuredProg
@@ -400,32 +412,35 @@ requireProgram verbosity prog conf = do
 
 -- | Check that a program is configured and available to be run.
 --
--- Additionally check that the version of the program number is suitable and
--- return it. For example you could require 'AnyVersion' or
--- @'orLaterVersion' ('Version' [1,0] [])@
+-- Additionally check that the program version number is suitable and return
+-- it. For example you could require 'AnyVersion' or @'orLaterVersion'
+-- ('Version' [1,0] [])@
 --
--- It raises an exception if the program could not be configured or the version
--- is unsuitable, otherwise it returns the configured program and its version
--- number.
+-- It returns the configured program, its version number and a possibly updated
+-- 'ProgramDb'. If the program could not be configured or the version is
+-- unsuitable, it returns an error value.
 --
-requireProgramVersion :: Verbosity -> Program -> VersionRange
-                      -> ProgramDb
-                      -> IO (ConfiguredProgram, Version, ProgramDb)
-requireProgramVersion verbosity prog range conf = do
+lookupProgramVersion
+  :: Verbosity -> Program -> VersionRange -> ProgramDb
+  -> IO (Either String (ConfiguredProgram, Version, ProgramDb))
+lookupProgramVersion verbosity prog range programDb = do
 
   -- If it's not already been configured, try to configure it now
-  conf' <- case lookupProgram prog conf of
-    Nothing -> configureProgram verbosity prog conf
-    Just _  -> return conf
+  programDb' <- case lookupProgram prog programDb of
+    Nothing -> configureProgram verbosity prog programDb
+    Just _  -> return programDb
 
-  case lookupProgram prog conf' of
-    Nothing                           -> die notFound
+  case lookupProgram prog programDb' of
+    Nothing                           -> return $! Left notFound
     Just configuredProg@ConfiguredProgram { programLocation = location } ->
       case programVersion configuredProg of
         Just version
-          | withinRange version range -> return (configuredProg, version, conf')
-          | otherwise                 -> die (badVersion version location)
-        Nothing                       -> die (noVersion location)
+          | withinRange version range ->
+            return $! Right (configuredProg, version ,programDb')
+          | otherwise                 ->
+            return $! Left (badVersion version location)
+        Nothing                       ->
+          return $! Left (noVersion location)
 
   where notFound       = "The program '"
                       ++ programName prog ++ "'" ++ versionRequirement
@@ -441,3 +456,13 @@ requireProgramVersion verbosity prog range conf = do
         versionRequirement
           | isAnyVersion range = ""
           | otherwise          = " version " ++ display range
+
+-- | Like 'lookupProgramVersion', but raises an exception in case of error
+-- instead of returning 'Left errMsg'.
+--
+requireProgramVersion :: Verbosity -> Program -> VersionRange
+                      -> ProgramDb
+                      -> IO (ConfiguredProgram, Version, ProgramDb)
+requireProgramVersion verbosity prog range programDb =
+  join $ either die return <$>
+  lookupProgramVersion verbosity prog range programDb

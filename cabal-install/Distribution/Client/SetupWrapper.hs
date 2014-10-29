@@ -34,7 +34,7 @@ import Distribution.Package
 import Distribution.PackageDescription
          ( GenericPackageDescription(packageDescription)
          , PackageDescription(..), specVersion
-         , BuildType(..), knownBuildTypes )
+         , BuildType(..), knownBuildTypes, defaultRenaming )
 import Distribution.PackageDescription.Parse
          ( readPackageDescription )
 import Distribution.Simple.Configure
@@ -60,7 +60,7 @@ import Distribution.Simple.Command
 import Distribution.Simple.Program.GHC
          ( GhcMode(..), GhcOptions(..), renderGhcOptions )
 import qualified Distribution.Simple.PackageIndex as PackageIndex
-import Distribution.Simple.PackageIndex (PackageIndex)
+import Distribution.Simple.PackageIndex (InstalledPackageIndex)
 import Distribution.Client.Config
          ( defaultCabalDir )
 import Distribution.Client.IndexUtils
@@ -80,6 +80,8 @@ import Distribution.Client.Utils
 import Distribution.System ( Platform(..), buildPlatform )
 import Distribution.Text
          ( display )
+import Distribution.Utils.NubList
+         ( toNubListR )
 import Distribution.Verbosity
          ( Verbosity )
 import Distribution.Compat.Exception
@@ -102,7 +104,7 @@ data SetupScriptOptions = SetupScriptOptions {
     useCompiler              :: Maybe Compiler,
     usePlatform              :: Maybe Platform,
     usePackageDB             :: PackageDBStack,
-    usePackageIndex          :: Maybe PackageIndex,
+    usePackageIndex          :: Maybe InstalledPackageIndex,
     useProgramConfig         :: ProgramConfiguration,
     useDistPref              :: FilePath,
     useLoggingHandle         :: Maybe Handle,
@@ -243,7 +245,7 @@ externalSetupMethod verbosity options pkg bt mkargs = do
   useCachedSetupExecutable = (bt == Simple || bt == Configure || bt == Make)
 
   maybeGetInstalledPackages :: SetupScriptOptions -> Compiler
-                               -> ProgramConfiguration -> IO PackageIndex
+                               -> ProgramConfiguration -> IO InstalledPackageIndex
   maybeGetInstalledPackages options' comp conf =
     case usePackageIndex options' of
       Just index -> return index
@@ -473,17 +475,17 @@ externalSetupMethod verbosity options pkg bt mkargs = do
       let ghcOptions = mempty {
               ghcOptVerbosity       = Flag verbosity
             , ghcOptMode            = Flag GhcModeMake
-            , ghcOptInputFiles      = [setupHs]
+            , ghcOptInputFiles      = toNubListR [setupHs]
             , ghcOptOutputFile      = Flag setupProgFile
             , ghcOptObjDir          = Flag setupDir
             , ghcOptHiDir           = Flag setupDir
             , ghcOptSourcePathClear = Flag True
-            , ghcOptSourcePath      = [workingDir]
+            , ghcOptSourcePath      = toNubListR [workingDir]
             , ghcOptPackageDBs      = usePackageDB options''
-            , ghcOptPackages        = maybe []
-                                      (\ipkgid -> [(ipkgid, cabalPkgid)])
-                                      maybeCabalLibInstalledPkgId
-            , ghcOptExtra           = extraOpts
+            , ghcOptPackages        = toNubListR $
+                maybe [] (\ipkgid -> [(ipkgid, cabalPkgid, defaultRenaming)])
+                maybeCabalLibInstalledPkgId
+            , ghcOptExtra           = toNubListR extraOpts
             }
       let ghcCmdLine = renderGhcOptions compiler ghcOptions
       case useLoggingHandle options of

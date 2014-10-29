@@ -60,16 +60,17 @@ import Distribution.InstalledPackageInfo
          ( InstalledPackageInfo )
 import qualified Distribution.InstalledPackageInfo as InstalledPackageInfo
                                 ( InstalledPackageInfo_(..) )
-import Distribution.Simple.PackageIndex (PackageIndex)
+import Distribution.Simple.PackageIndex (InstalledPackageIndex)
 import qualified Distribution.Simple.PackageIndex as PackageIndex
 import Distribution.Simple.LocalBuildInfo
          ( LocalBuildInfo(..), ComponentLocalBuildInfo(..)
          , LibraryName(..), absoluteInstallDirs )
+import qualified Distribution.Simple.Hpc as Hpc
 import Distribution.Simple.InstallDirs hiding ( absoluteInstallDirs )
 import Distribution.Simple.BuildPaths
 import Distribution.Simple.Utils
 import Distribution.Package
-         ( PackageName(..) )
+         ( PackageName(..), InstalledPackageId, PackageId )
 import qualified Distribution.ModuleName as ModuleName
 import Distribution.Simple.Program
          ( Program(..), ConfiguredProgram(..), ProgramConfiguration
@@ -88,7 +89,7 @@ import qualified Distribution.Simple.Program.Ld    as Ld
 import qualified Distribution.Simple.Program.Strip as Strip
 import Distribution.Simple.Program.GHC
 import Distribution.Simple.Setup
-         ( toFlag, fromFlag, fromFlagOrDefault )
+         ( toFlag, fromFlag, fromFlagOrDefault, configCoverage, configDistPref )
 import qualified Distribution.Simple.Setup as Cabal
         ( Flag )
 import Distribution.Simple.Compiler
@@ -99,12 +100,15 @@ import Distribution.Version
 import Distribution.System
          ( Platform(..), OS(..), buildOS, platformFromTriple )
 import Distribution.Verbosity
-import Distribution.Text ( display )
+import Distribution.Text
+         ( display, simpleParse )
+import Distribution.Utils.NubList
+         ( overNubListR, toNubListR )
 import Language.Haskell.Extension (Language(..), Extension(..)
                                   ,KnownExtension(..))
 
 import Control.Monad            ( unless, when )
-import Data.Char                ( isSpace )
+import Data.Char                ( isDigit, isSpace )
 import Data.List
 import qualified Data.Map as M  ( Map, fromList, lookup )
 import Data.Maybe               ( catMaybes, fromMaybe, maybeToList )
@@ -209,8 +213,10 @@ guessToolFromGhcPath tool ghcProg verbosity searchpath
                       return (Just fp)
 
   where takeVersionSuffix :: FilePath -> String
-        takeVersionSuffix = reverse . takeWhile (`elem ` "0123456789.-") .
-                            reverse
+        takeVersionSuffix = takeWhileEndLE isSuffixChar
+
+        isSuffixChar :: Char -> Bool
+        isSuffixChar c = isDigit c || c == '.' || c == '-'
 
         dropExeExtension :: FilePath -> FilePath
         dropExeExtension filepath =
@@ -244,14 +250,14 @@ guessHsc2hsFromGhcPath = guessToolFromGhcPath hsc2hsProgram
 
 -- | Given a single package DB, return all installed packages.
 getPackageDBContents :: Verbosity -> PackageDB -> ProgramConfiguration
-                        -> IO PackageIndex
+                        -> IO InstalledPackageIndex
 getPackageDBContents verbosity packagedb conf = do
   pkgss <- getInstalledPackages' verbosity [packagedb] conf
   toPackageIndex verbosity pkgss conf
 
 -- | Given a package DB stack, return all installed packages.
 getInstalledPackages :: Verbosity -> PackageDBStack -> ProgramConfiguration
-                     -> IO PackageIndex
+                     -> IO InstalledPackageIndex
 getInstalledPackages verbosity packagedbs conf = do
   checkPackageDbEnvVar
   checkPackageDbStack packagedbs
@@ -273,7 +279,7 @@ getInstalledPackages verbosity packagedbs conf = do
 toPackageIndex :: Verbosity
                -> [(PackageDB, [InstalledPackageInfo])]
                -> ProgramConfiguration
-               -> IO PackageIndex
+               -> IO InstalledPackageIndex
 toPackageIndex verbosity pkgss conf = do
   -- On Windows, various fields have $topdir/foo rather than full
   -- paths. We need to substitute the right value in so that when
@@ -288,20 +294,20 @@ toPackageIndex verbosity pkgss conf = do
 
 ghcLibDir :: Verbosity -> LocalBuildInfo -> IO FilePath
 ghcLibDir verbosity lbi =
-    (reverse . dropWhile isSpace . reverse) `fmap`
+    dropWhileEndLE isSpace `fmap`
      rawSystemProgramStdoutConf verbosity ghcProgram
      (withPrograms lbi) ["--print-libdir"]
 
 ghcLibDir' :: Verbosity -> ConfiguredProgram -> IO FilePath
 ghcLibDir' verbosity ghcProg =
-    (reverse . dropWhile isSpace . reverse) `fmap`
+    dropWhileEndLE isSpace `fmap`
      rawSystemProgramStdout verbosity ghcProg ["--print-libdir"]
 
 
 -- | Return the 'FilePath' to the global GHC package database.
 ghcGlobalPackageDB :: Verbosity -> ConfiguredProgram -> IO FilePath
 ghcGlobalPackageDB verbosity ghcProg =
-    (reverse . dropWhile isSpace . reverse) `fmap`
+    dropWhileEndLE isSpace `fmap`
      rawSystemProgramStdout verbosity ghcProg ["--print-global-package-db"]
 
 -- Cabal does not use the environment variable GHC_PACKAGE_PATH; let users
@@ -452,23 +458,34 @@ buildOrReplLib forRepl verbosity numJobsFlag pkg_descr lbi lib clbi = do
       forceSharedLib  = doingTH &&     isGhcDynamic
       -- TH always needs default libs, even when building for profiling
 
+  -- Determine if program coverage should be enabled and if so, what
+  -- '-hpcdir' should be.
+  let isCoverageEnabled = fromFlag $ configCoverage $ configFlags lbi
+      -- Component name. Not 'libName' because that has the "HS" prefix
+      -- that GHC gives Haskell libraries.
+      cname = display $ PD.package $ localPkgDescr lbi
+      distPref = fromFlag $ configDistPref $ configFlags lbi
+      hpcdir | isCoverageEnabled = toFlag $ Hpc.mixDir distPref cname
+             | otherwise = mempty
+
   createDirectoryIfMissingVerbose verbosity True libTargetDir
   -- TODO: do we need to put hs-boot files into place for mutually recursive
   -- modules?
   let cObjs       = map (`replaceExtension` objExtension) (cSources libBi)
       baseOpts    = componentGhcOptions verbosity lbi libBi clbi libTargetDir
+                    `mappend` mempty { ghcOptHPCDir = hpcdir }
       vanillaOpts = baseOpts `mappend` mempty {
                       ghcOptMode         = toFlag GhcModeMake,
                       ghcOptNumJobs      = toFlag numJobs,
                       ghcOptPackageKey   = toFlag (pkgKey lbi),
-                      ghcOptInputModules = libModules lib
+                      ghcOptInputModules = toNubListR $ libModules lib
                     }
 
       profOpts    = vanillaOpts `mappend` mempty {
                       ghcOptProfilingMode = toFlag True,
                       ghcOptHiSuffix      = toFlag "p_hi",
                       ghcOptObjSuffix     = toFlag "p_o",
-                      ghcOptExtra         = hcProfOptions GHC libBi
+                      ghcOptExtra         = toNubListR $ hcProfOptions GHC libBi
                     }
 
       sharedOpts  = vanillaOpts `mappend` mempty {
@@ -476,17 +493,19 @@ buildOrReplLib forRepl verbosity numJobsFlag pkg_descr lbi lib clbi = do
                       ghcOptFPic        = toFlag True,
                       ghcOptHiSuffix    = toFlag "dyn_hi",
                       ghcOptObjSuffix   = toFlag "dyn_o",
-                      ghcOptExtra       = hcSharedOptions GHC libBi
+                      ghcOptExtra       = toNubListR $ hcSharedOptions GHC libBi
                     }
       linkerOpts = mempty {
-                      ghcOptLinkOptions    = PD.ldOptions libBi,
-                      ghcOptLinkLibs       = extraLibs libBi,
-                      ghcOptLinkLibPath    = extraLibDirs libBi,
-                      ghcOptLinkFrameworks = PD.frameworks libBi,
-                      ghcOptInputFiles     = [libTargetDir </> x | x <- cObjs]
+                      ghcOptLinkOptions    = toNubListR $ PD.ldOptions libBi,
+                      ghcOptLinkLibs       = toNubListR $ extraLibs libBi,
+                      ghcOptLinkLibPath    = toNubListR $ extraLibDirs libBi,
+                      ghcOptLinkFrameworks = toNubListR $ PD.frameworks libBi,
+                      ghcOptInputFiles     = toNubListR
+                                             [libTargetDir </> x | x <- cObjs]
                    }
       replOpts    = vanillaOpts {
-                      ghcOptExtra        = Internal.filterGhciFlags
+                      ghcOptExtra        = overNubListR
+                                           Internal.filterGhciFlags $
                                            (ghcOptExtra vanillaOpts),
                       ghcOptNumJobs      = mempty
                     }
@@ -614,7 +633,7 @@ buildOrReplLib forRepl verbosity numJobsFlag pkg_descr lbi lib clbi = do
               mempty {
                 ghcOptShared             = toFlag True,
                 ghcOptDynLinkMode        = toFlag GhcDynamicOnly,
-                ghcOptInputFiles         = dynamicObjectFiles,
+                ghcOptInputFiles         = toNubListR dynamicObjectFiles,
                 ghcOptOutputFile         = toFlag sharedLibFilePath,
                 -- For dynamic libs, Mac OS/X needs to know the install location
                 -- at build time. This only applies to GHC < 7.8 - see the
@@ -626,9 +645,10 @@ buildOrReplLib forRepl verbosity numJobsFlag pkg_descr lbi lib clbi = do
                 ghcOptPackageKey         = toFlag (pkgKey lbi),
                 ghcOptNoAutoLinkPackages = toFlag True,
                 ghcOptPackageDBs         = withPackageDB lbi,
-                ghcOptPackages           = componentPackageDeps clbi,
-                ghcOptLinkLibs           = extraLibs libBi,
-                ghcOptLinkLibPath        = extraLibDirs libBi
+                ghcOptPackages           = toNubListR $
+                                           Internal.mkGhcOptPackages clbi ,
+                ghcOptLinkLibs           = toNubListR $ extraLibs libBi,
+                ghcOptLinkLibPath        = toNubListR $ extraLibDirs libBi
               }
 
       whenVanillaLib False $ do
@@ -695,6 +715,13 @@ buildOrReplExe forRepl verbosity numJobsFlag _pkg_descr lbi
   -- TODO: do we need to put hs-boot files into place for mutually recursive
   -- modules?  FIX: what about exeName.hi-boot?
 
+  -- Determine if program coverage should be enabled and if so, what
+  -- '-hpcdir' should be.
+  let isCoverageEnabled = fromFlag $ configCoverage $ configFlags lbi
+      distPref = fromFlag $ configDistPref $ configFlags lbi
+      hpcdir | isCoverageEnabled = toFlag $ Hpc.mixDir distPref exeName'
+             | otherwise = mempty
+
   -- build executables
 
   srcMainFile         <- findFile (exeDir : hsSourceDirs exeBi) modPath
@@ -706,10 +733,11 @@ buildOrReplExe forRepl verbosity numJobsFlag _pkg_descr lbi
       baseOpts   = (componentGhcOptions verbosity lbi exeBi clbi exeDir)
                     `mappend` mempty {
                       ghcOptMode         = toFlag GhcModeMake,
-                      ghcOptInputFiles   =
+                      ghcOptInputFiles   = toNubListR
                         [ srcMainFile | isHaskellMain],
-                      ghcOptInputModules =
-                        [ m | not isHaskellMain, m <- exeModules exe]
+                      ghcOptInputModules = toNubListR
+                        [ m | not isHaskellMain, m <- exeModules exe],
+                      ghcOptHPCDir = hpcdir
                     }
       staticOpts = baseOpts `mappend` mempty {
                       ghcOptDynLinkMode    = toFlag GhcStaticOnly
@@ -718,13 +746,14 @@ buildOrReplExe forRepl verbosity numJobsFlag _pkg_descr lbi
                       ghcOptProfilingMode  = toFlag True,
                       ghcOptHiSuffix       = toFlag "p_hi",
                       ghcOptObjSuffix      = toFlag "p_o",
-                      ghcOptExtra          = hcProfOptions GHC exeBi
+                      ghcOptExtra          = toNubListR $ hcProfOptions GHC exeBi
                     }
       dynOpts    = baseOpts `mappend` mempty {
                       ghcOptDynLinkMode    = toFlag GhcDynamicOnly,
                       ghcOptHiSuffix       = toFlag "dyn_hi",
                       ghcOptObjSuffix      = toFlag "dyn_o",
-                      ghcOptExtra          = hcSharedOptions GHC exeBi
+                      ghcOptExtra          = toNubListR $
+                                             hcSharedOptions GHC exeBi
                     }
       dynTooOpts = staticOpts `mappend` mempty {
                       ghcOptDynLinkMode    = toFlag GhcStaticAndDynamic,
@@ -732,14 +761,16 @@ buildOrReplExe forRepl verbosity numJobsFlag _pkg_descr lbi
                       ghcOptDynObjSuffix   = toFlag "dyn_o"
                     }
       linkerOpts = mempty {
-                      ghcOptLinkOptions    = PD.ldOptions exeBi,
-                      ghcOptLinkLibs       = extraLibs exeBi,
-                      ghcOptLinkLibPath    = extraLibDirs exeBi,
-                      ghcOptLinkFrameworks = PD.frameworks exeBi,
-                      ghcOptInputFiles     = [exeDir </> x | x <- cObjs]
+                      ghcOptLinkOptions    = toNubListR $ PD.ldOptions exeBi,
+                      ghcOptLinkLibs       = toNubListR $ extraLibs exeBi,
+                      ghcOptLinkLibPath    = toNubListR $ extraLibDirs exeBi,
+                      ghcOptLinkFrameworks = toNubListR $ PD.frameworks exeBi,
+                      ghcOptInputFiles     = toNubListR
+                                             [exeDir </> x | x <- cObjs]
                    }
       replOpts   = baseOpts {
-                      ghcOptExtra          = Internal.filterGhciFlags
+                      ghcOptExtra          = overNubListR
+                                             Internal.filterGhciFlags
                                              (ghcOptExtra baseOpts)
                    }
                    -- For a normal compile we do separate invocations of ghc for
@@ -852,20 +883,20 @@ libAbiHash verbosity _pkg_descr lbi lib clbi = do
         `mappend` mempty {
           ghcOptMode         = toFlag GhcModeAbiHash,
           ghcOptPackageKey   = toFlag (pkgKey lbi),
-          ghcOptInputModules = exposedModules lib
+          ghcOptInputModules = toNubListR $ exposedModules lib
         }
       sharedArgs = vanillaArgs `mappend` mempty {
                        ghcOptDynLinkMode = toFlag GhcDynamicOnly,
                        ghcOptFPic        = toFlag True,
                        ghcOptHiSuffix    = toFlag "dyn_hi",
                        ghcOptObjSuffix   = toFlag "dyn_o",
-                       ghcOptExtra       = hcSharedOptions GHC libBi
+                       ghcOptExtra       = toNubListR $ hcSharedOptions GHC libBi
                    }
       profArgs = vanillaArgs `mappend` mempty {
                      ghcOptProfilingMode = toFlag True,
                      ghcOptHiSuffix      = toFlag "p_hi",
                      ghcOptObjSuffix     = toFlag "p_o",
-                     ghcOptExtra         = hcProfOptions GHC libBi
+                     ghcOptExtra         = toNubListR $ hcProfOptions GHC libBi
                  }
       ghcArgs = if withVanillaLib lbi then vanillaArgs
            else if withSharedLib  lbi then sharedArgs
@@ -873,7 +904,8 @@ libAbiHash verbosity _pkg_descr lbi lib clbi = do
            else error "libAbiHash: Can't find an enabled library way"
   --
   (ghcProg, _) <- requireProgram verbosity ghcProgram (withPrograms lbi)
-  getProgramInvocationOutput verbosity (ghcInvocation ghcProg comp ghcArgs)
+  hash <- getProgramInvocationOutput verbosity (ghcInvocation ghcProg comp ghcArgs)
+  return (takeWhile (not . isSpace) hash)
 
 componentGhcOptions :: Verbosity -> LocalBuildInfo
                     -> BuildInfo -> ComponentLocalBuildInfo -> FilePath

@@ -46,7 +46,6 @@ import Distribution.Simple.BuildPaths (haddockName)
 import qualified Distribution.Simple.GHC   as GHC
 import qualified Distribution.Simple.GHCJS as GHCJS
 import qualified Distribution.Simple.LHC   as LHC
-import qualified Distribution.Simple.Hugs  as Hugs
 import qualified Distribution.Simple.UHC   as UHC
 import qualified Distribution.Simple.HaskellSuite as HaskellSuite
 
@@ -66,12 +65,12 @@ import Distribution.Simple.Setup
          ( RegisterFlags(..), CopyDest(..)
          , fromFlag, fromFlagOrDefault, flagToMaybe )
 import Distribution.PackageDescription
-         ( PackageDescription(..), Library(..), BuildInfo(..), hcOptions )
+         ( PackageDescription(..), Library(..), BuildInfo(..) )
 import Distribution.Package
          ( Package(..), packageName, InstalledPackageId(..) )
 import Distribution.InstalledPackageInfo
          ( InstalledPackageInfo, InstalledPackageInfo_(InstalledPackageInfo)
-         , showInstalledPackageInfo )
+         , showInstalledPackageInfo, ModuleReexport(..) )
 import qualified Distribution.InstalledPackageInfo as IPI
 import Distribution.Simple.Utils
          ( writeUTF8File, writeFileAtomic, setFileExecutable
@@ -83,12 +82,10 @@ import Distribution.Text
 import Distribution.Version ( Version(..) )
 import Distribution.Verbosity as Verbosity
          ( Verbosity, normal )
-import Distribution.Compat.Exception
-         ( tryIO )
 
 import System.FilePath ((</>), (<.>), isAbsolute)
 import System.Directory
-         ( getCurrentDirectory, removeDirectoryRecursive )
+         ( getCurrentDirectory )
 
 import Control.Monad (when)
 import Data.Maybe
@@ -150,11 +147,19 @@ register pkg@PackageDescription { library       = Just lib  } lbi regFlags
         LHC   -> do (lhcPkg, _) <- requireProgram verbosity lhcPkgProgram (withPrograms lbi)
                     writeHcPkgRegisterScript verbosity (compiler lbi)
                       installedPkgInfo lhcPkg packageDbs
-        Hugs  -> notice verbosity "Registration scripts not needed for hugs"
         JHC   -> notice verbosity "Registration scripts not needed for jhc"
-        NHC   -> notice verbosity "Registration scripts not needed for nhc98"
         UHC   -> notice verbosity "Registration scripts not needed for uhc"
         _     -> die "Registration scripts are not implemented for this compiler"
+{- fixme remove
+=======
+        GHC  -> do (ghcPkg, _) <- requireProgram verbosity ghcPkgProgram (withPrograms lbi)
+                   writeHcPkgRegisterScript verbosity installedPkgInfo ghcPkg packageDbs
+        LHC  -> do (lhcPkg, _) <- requireProgram verbosity lhcPkgProgram (withPrograms lbi)
+                   writeHcPkgRegisterScript verbosity installedPkgInfo lhcPkg packageDbs
+        JHC  -> notice verbosity "Registration scripts not needed for jhc"
+        UHC  -> notice verbosity "Registration scripts not needed for uhc"
+        _    -> die "Registration scripts are not implemented for this compiler"
+-}
 
 register _ _ regFlags = notice verbosity "No package to register"
   where
@@ -189,9 +194,9 @@ generateRegistrationInfo verbosity pkg lib lbi clbi inplace distPref = do
 
   let installedPkgInfo
         | inplace   = inplaceInstalledPackageInfo pwd distPref
-                        pkg lib lbi clbi
+                        pkg ipid lib lbi clbi
         | otherwise = absoluteInstalledPackageInfo
-                        pkg lib lbi clbi
+                        pkg ipid lib lbi clbi
 
   return installedPkgInfo{ IPI.installedPackageId = ipid }
 
@@ -231,13 +236,11 @@ registerPackage verbosity installedPkgInfo pkg lbi inplace packageDbs = do
             else "Registering"
   setupMessage verbosity msg (packageId pkg)
   case compilerFlavor (compiler lbi) of
-    GHC   -> GHC.registerPackage  verbosity installedPkgInfo pkg lbi inplace packageDbs
-    GHCJS -> GHCJS.registerPackage  verbosity installedPkgInfo pkg lbi inplace packageDbs
-    LHC   -> LHC.registerPackage  verbosity installedPkgInfo pkg lbi inplace packageDbs
-    Hugs  -> Hugs.registerPackage verbosity installedPkgInfo pkg lbi inplace packageDbs
-    UHC   -> UHC.registerPackage  verbosity installedPkgInfo pkg lbi inplace packageDbs
+    GHC   -> GHC.registerPackage   verbosity installedPkgInfo pkg lbi inplace packageDbs
+    GHCJS -> GHCJS.registerPackage verbosity installedPkgInfo pkg lbi inplace packageDbs
+    LHC   -> LHC.registerPackage   verbosity installedPkgInfo pkg lbi inplace packageDbs
+    UHC   -> UHC.registerPackage   verbosity installedPkgInfo pkg lbi inplace packageDbs
     JHC   -> notice verbosity "Registering for jhc (nothing to do)"
-    NHC   -> notice verbosity "Registering for nhc98 (nothing to do)"
     HaskellSuite {} ->
       HaskellSuite.registerPackage verbosity installedPkgInfo pkg lbi inplace packageDbs
     _    -> die "Registering is not implemented for this compiler"
@@ -273,15 +276,15 @@ generalInstalledPackageInfo
   :: ([FilePath] -> [FilePath]) -- ^ Translate relative include dir paths to
                                 -- absolute paths.
   -> PackageDescription
+  -> InstalledPackageId
   -> Library
   -> LocalBuildInfo
   -> ComponentLocalBuildInfo
   -> InstallDirs FilePath
   -> InstalledPackageInfo
-generalInstalledPackageInfo adjustRelIncDirs pkg lib lbi clbi installDirs =
+generalInstalledPackageInfo adjustRelIncDirs pkg ipid lib lbi clbi installDirs =
   InstalledPackageInfo {
-    --TODO: do not open-code this conversion from PackageId to InstalledPackageId
-    IPI.installedPackageId = InstalledPackageId (display (packageId pkg)),
+    IPI.installedPackageId = ipid,
     IPI.sourcePackageId    = packageId   pkg,
     IPI.packageKey         = pkgKey lbi,
     IPI.license            = license     pkg,
@@ -296,7 +299,7 @@ generalInstalledPackageInfo adjustRelIncDirs pkg lib lbi clbi installDirs =
     IPI.category           = category    pkg,
     IPI.exposed            = libExposed  lib,
     IPI.exposedModules     = exposedModules lib,
-    IPI.reexportedModules  = reexportedModules lib,
+    IPI.reexportedModules  = map fixupSelfReexport (componentModuleReexports clbi),
     IPI.hiddenModules      = otherModules bi,
     IPI.trusted            = IPI.trusted IPI.emptyInstalledPackageInfo,
     IPI.importDirs         = [ libdir installDirs | hasModules ],
@@ -307,11 +310,10 @@ generalInstalledPackageInfo adjustRelIncDirs pkg lib lbi clbi installDirs =
                              | LibraryName libname <- componentLibraries clbi
                              , hasLibrary ],
     IPI.extraLibraries     = extraLibs bi,
-    IPI.extraGHCiLibraries = [],
+    IPI.extraGHCiLibraries = extraGHCiLibs bi,
     IPI.includeDirs        = absinc ++ adjustRelIncDirs relinc,
     IPI.includes           = includes bi,
     IPI.depends            = map fst (componentPackageDeps clbi),
-    IPI.hugsOptions        = hcOptions Hugs bi,
     IPI.ccOptions          = [], -- Note. NOT ccOptions bi!
                                  -- We don't want cc-options to be propagated
                                  -- to C compilations in other packages.
@@ -329,6 +331,18 @@ generalInstalledPackageInfo adjustRelIncDirs pkg lib lbi clbi installDirs =
     hasLibrary = hasModules || not (null (cSources bi))
                             || not (null (jsSources bi))
 
+    -- Since we currently don't decide the InstalledPackageId of our package
+    -- until just before we register, we didn't have one for the re-exports
+    -- of modules definied within this package, so we used an empty one that
+    -- we fill in here now that we know what it is. It's a bit of a hack,
+    -- we ought really to decide the InstalledPackageId ahead of time.
+    fixupSelfReexport mre@ModuleReexport {
+                        moduleReexportDefiningPackage = InstalledPackageId []
+                      }
+                    = mre {
+                        moduleReexportDefiningPackage = ipid
+                      }
+    fixupSelfReexport mre = mre
 
 -- | Construct 'InstalledPackageInfo' for a library that is in place in the
 -- build tree.
@@ -338,13 +352,14 @@ generalInstalledPackageInfo adjustRelIncDirs pkg lib lbi clbi installDirs =
 inplaceInstalledPackageInfo :: FilePath -- ^ top of the build tree
                             -> FilePath -- ^ location of the dist tree
                             -> PackageDescription
+                            -> InstalledPackageId
                             -> Library
                             -> LocalBuildInfo
                             -> ComponentLocalBuildInfo
                             -> InstalledPackageInfo
-inplaceInstalledPackageInfo inplaceDir distPref pkg lib lbi clbi =
-    generalInstalledPackageInfo adjustRelativeIncludeDirs pkg lib lbi clbi
-    installDirs
+inplaceInstalledPackageInfo inplaceDir distPref pkg ipid lib lbi clbi =
+    generalInstalledPackageInfo adjustRelativeIncludeDirs
+                                pkg ipid lib lbi clbi installDirs
   where
     adjustRelativeIncludeDirs = map (inplaceDir </>)
     installDirs =
@@ -366,12 +381,14 @@ inplaceInstalledPackageInfo inplaceDir distPref pkg lib lbi clbi =
 -- This function knows about the layout of installed packages.
 --
 absoluteInstalledPackageInfo :: PackageDescription
+                             -> InstalledPackageId
                              -> Library
                              -> LocalBuildInfo
                              -> ComponentLocalBuildInfo
                              -> InstalledPackageInfo
-absoluteInstalledPackageInfo pkg lib lbi clbi =
-    generalInstalledPackageInfo adjustReativeIncludeDirs pkg lib lbi clbi installDirs
+absoluteInstalledPackageInfo pkg ipid lib lbi clbi =
+    generalInstalledPackageInfo adjustReativeIncludeDirs
+                                pkg ipid lib lbi clbi installDirs
   where
     -- For installed packages we install all include files into one dir,
     -- whereas in the build tree they may live in multiple local dirs.
@@ -391,7 +408,6 @@ unregister pkg lbi regFlags = do
       verbosity = fromFlag (regVerbosity regFlags)
       packageDb = fromFlagOrDefault (registrationPackageDB (withPackageDB lbi))
                                     (regPackageDB regFlags)
-      installDirs = absoluteInstallDirs pkg lbi NoCopyDest
   setupMessage verbosity "Unregistering" pkgid
   case compilerFlavor (compiler lbi) of
     GHC ->
@@ -410,14 +426,8 @@ unregister pkg lbi regFlags = do
            then writeFileAtomic unregScriptFileName
                   (BS.Char8.pack $ invocationAsSystemScript buildOS invocation)
             else runProgramInvocation verbosity invocation
-    Hugs -> do
-        _ <- tryIO $ removeDirectoryRecursive (libdir installDirs)
-        return ()
-    NHC -> do
-        _ <- tryIO $ removeDirectoryRecursive (libdir installDirs)
-        return ()
     _ ->
-        die ("only unregistering with GHC, GHCJS, NHC and Hugs is implemented")
+        die ("unregistering is only implemented for GHC and GHCJS")
 
 unregScriptFileName :: FilePath
 unregScriptFileName = case buildOS of

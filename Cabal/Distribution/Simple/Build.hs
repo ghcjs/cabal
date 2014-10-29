@@ -27,8 +27,6 @@ import qualified Distribution.Simple.GHC   as GHC
 import qualified Distribution.Simple.GHCJS as GHCJS
 import qualified Distribution.Simple.JHC   as JHC
 import qualified Distribution.Simple.LHC   as LHC
-import qualified Distribution.Simple.NHC   as NHC
-import qualified Distribution.Simple.Hugs  as Hugs
 import qualified Distribution.Simple.UHC   as UHC
 import qualified Distribution.Simple.HaskellSuite as HaskellSuite
 
@@ -37,18 +35,19 @@ import qualified Distribution.Simple.Build.PathsModule as Build.PathsModule
 
 import Distribution.Package
          ( Package(..), PackageName(..), PackageIdentifier(..)
-         , Dependency(..), thisPackageVersion, mkPackageKey )
+         , Dependency(..), thisPackageVersion, mkPackageKey, packageName )
 import Distribution.Simple.Compiler
          ( Compiler, CompilerFlavor(..), compilerFlavor
          , PackageDB(..), PackageDBStack, packageKeySupported )
 import Distribution.PackageDescription
          ( PackageDescription(..), BuildInfo(..), Library(..), Executable(..)
          , TestSuite(..), TestSuiteInterface(..), Benchmark(..)
-         , BenchmarkInterface(..) )
+         , BenchmarkInterface(..), defaultRenaming )
 import qualified Distribution.InstalledPackageInfo as IPI
 import qualified Distribution.ModuleName as ModuleName
 import Distribution.ModuleName (ModuleName)
 
+import Distribution.Simple.Program (ghcPkgProgram)
 import Distribution.Simple.Setup
          ( Flag(..), BuildFlags(..), ReplFlags(..), fromFlag )
 import Distribution.Simple.BuildTarget
@@ -63,8 +62,10 @@ import Distribution.Simple.LocalBuildInfo
          , ComponentName(..), showComponentName
          , ComponentDisabledReason(..), componentDisabledReason
          , inplacePackageId, LibraryName(..) )
+import Distribution.Simple.GHC.Props ( ImplProps, getImplProps )
 import Distribution.Simple.Program.Types
 import Distribution.Simple.Program.Db
+import qualified Distribution.Simple.Program.HcPkg as HcPkg
 import Distribution.Simple.BuildPaths
          ( autogenModulesDir, autogenModuleName, cppHeaderName, exeExtension )
 import Distribution.Simple.Register
@@ -79,6 +80,7 @@ import Distribution.Verbosity
 import Distribution.Text
          ( display )
 
+import qualified Data.Map as Map
 import Data.Maybe
          ( maybeToList )
 import Data.Either
@@ -90,7 +92,7 @@ import Control.Monad
 import System.FilePath
          ( (</>), (<.>) )
 import System.Directory
-         ( getCurrentDirectory )
+         ( getCurrentDirectory, removeDirectoryRecursive, doesDirectoryExist )
 
 -- -----------------------------------------------------------------------------
 -- |Build the libraries and executables in this package.
@@ -115,7 +117,10 @@ build pkg_descr lbi flags suffixes = do
     -- Only bother with this message if we're building the whole package
     setupMessage verbosity "Building" (packageId pkg_descr)
 
-  internalPackageDB <- createInternalPackageDB distPref
+  let Just ghcPkgProg = lookupProgram ghcPkgProgram (withPrograms lbi)
+      props           = getImplProps (compiler lbi)
+  internalPackageDB <- createInternalPackageDB verbosity props
+                                               ghcPkgProg distPref
 
   withComponentsInBuildOrder pkg_descr lbi componentsToBuild $ \comp clbi ->
     let bi     = componentBuildInfo comp
@@ -152,7 +157,10 @@ repl pkg_descr lbi flags suffixes args = do
 
   initialBuildSteps distPref pkg_descr lbi verbosity
 
-  internalPackageDB <- createInternalPackageDB distPref
+  let Just ghcPkgProg = lookupProgram ghcPkgProgram (withPrograms lbi)
+      props           = getImplProps (compiler lbi)
+  internalPackageDB <- createInternalPackageDB verbosity props
+                                               ghcPkgProg distPref
   let lbiForComponent comp lbi' =
         lbi' {
           withPackageDB = withPackageDB lbi ++ [internalPackageDB],
@@ -201,12 +209,11 @@ buildComponent verbosity numJobs pkg_descr lbi suffixes
     -- Register the library in-place, so exes can depend
     -- on internally defined libraries.
     pwd <- getCurrentDirectory
-    let installedPkgInfo =
-          (inplaceInstalledPackageInfo pwd distPref pkg_descr lib lbi clbi) {
-            -- The in place registration uses the "-inplace" suffix,
-            -- not an ABI hash.
-            IPI.installedPackageId = inplacePackageId (packageId installedPkgInfo)
-          }
+    let -- The in place registration uses the "-inplace" suffix, not an ABI hash
+        ipkgid           = inplacePackageId (packageId installedPkgInfo)
+        installedPkgInfo = inplaceInstalledPackageInfo pwd distPref pkg_descr
+                                                       ipkgid lib lbi clbi
+
     registerPackage verbosity
       installedPkgInfo pkg_descr lbi True -- True meaning in place
       (withPackageDB lbi)
@@ -365,7 +372,9 @@ testSuiteLibV09AsLibAndExe pkg_descr
           }
     libClbi = LibComponentLocalBuildInfo
                 { componentPackageDeps = componentPackageDeps clbi
+                , componentPackageRenaming = componentPackageRenaming clbi
                 , componentLibraries = [LibraryName (testName test)]
+                , componentModuleReexports = []
                 }
     pkg = pkg_descr {
             package      = (package pkg_descr) {
@@ -384,9 +393,8 @@ testSuiteLibV09AsLibAndExe pkg_descr
         pkgKey = mkPackageKey (packageKeySupported (compiler lbi))
                               (package pkg) []
     }
-    ipi = (inplaceInstalledPackageInfo pwd distPref pkg lib lbi libClbi) {
-            IPI.installedPackageId = inplacePackageId $ packageId ipi
-          }
+    ipkgid = inplacePackageId (packageId pkg)
+    ipi    = inplaceInstalledPackageInfo pwd distPref pkg ipkgid lib lbi libClbi
     testDir = buildDir lbi </> stubName test
           </> stubName test ++ "-tmp"
     testLibDep = thisPackageVersion $ package pkg
@@ -396,7 +404,10 @@ testSuiteLibV09AsLibAndExe pkg_descr
             buildInfo  = (testBuildInfo test) {
                            hsSourceDirs       = [ testDir ],
                            targetBuildDepends = testLibDep
-                             : (targetBuildDepends $ testBuildInfo test)
+                             : (targetBuildDepends $ testBuildInfo test),
+                           targetBuildRenaming =
+                            Map.insert (packageName pkg) defaultRenaming
+                                (targetBuildRenaming $ testBuildInfo test)
                          }
           }
     -- | The stub executable needs a new 'ComponentLocalBuildInfo'
@@ -406,7 +417,10 @@ testSuiteLibV09AsLibAndExe pkg_descr
                     (IPI.installedPackageId ipi, packageId ipi)
                   : (filter (\(_, x) -> let PackageName name = pkgName x
                                         in name == "Cabal" || name == "base")
-                            (componentPackageDeps clbi))
+                            (componentPackageDeps clbi)),
+                componentPackageRenaming =
+                    Map.insert (packageName ipi) defaultRenaming
+                               (componentPackageRenaming clbi)
               }
 testSuiteLibV09AsLibAndExe _ TestSuite{} _ _ _ _ = error "testSuiteLibV09AsLibAndExe: wrong kind"
 
@@ -424,17 +438,21 @@ benchmarkExeV10asExe bm@Benchmark { benchmarkInterface = BenchmarkExeV10 _ f }
             buildInfo  = benchmarkBuildInfo bm
           }
     exeClbi = ExeComponentLocalBuildInfo {
-                componentPackageDeps = componentPackageDeps clbi
+                componentPackageDeps = componentPackageDeps clbi,
+                componentPackageRenaming = componentPackageRenaming clbi
               }
 benchmarkExeV10asExe Benchmark{} _ = error "benchmarkExeV10asExe: wrong kind"
 
 -- | Initialize a new package db file for libraries defined
 -- internally to the package.
-createInternalPackageDB :: FilePath -> IO PackageDB
-createInternalPackageDB distPref = do
-    let dbFile = distPref </> "package.conf.inplace"
-        packageDB = SpecificPackageDB dbFile
-    writeFile dbFile "[]"
+createInternalPackageDB :: Verbosity -> ImplProps -> ConfiguredProgram
+                        -> FilePath -> IO PackageDB
+createInternalPackageDB verbosity props ghcPkgProg distPref = do
+    let dbDir = distPref </> "package.conf.inplace"
+        packageDB = SpecificPackageDB dbDir
+    exists <- doesDirectoryExist dbDir
+    when exists $ removeDirectoryRecursive dbDir
+    HcPkg.init verbosity props ghcPkgProg dbDir
     return packageDB
 
 addInternalBuildTools :: PackageDescription -> LocalBuildInfo -> BuildInfo
@@ -460,13 +478,11 @@ buildLib :: Verbosity -> Flag (Maybe Int)
                       -> Library            -> ComponentLocalBuildInfo -> IO ()
 buildLib verbosity numJobs pkg_descr lbi lib clbi =
   case compilerFlavor (compiler lbi) of
-    GHC  -> GHC.buildLib    verbosity numJobs pkg_descr lbi lib clbi
+    GHC   -> GHC.buildLib   verbosity numJobs pkg_descr lbi lib clbi
     GHCJS -> GHCJS.buildLib verbosity numJobs pkg_descr lbi lib clbi
-    JHC  -> JHC.buildLib    verbosity         pkg_descr lbi lib clbi
-    LHC  -> LHC.buildLib    verbosity         pkg_descr lbi lib clbi
-    Hugs -> Hugs.buildLib   verbosity         pkg_descr lbi lib clbi
-    NHC  -> NHC.buildLib    verbosity         pkg_descr lbi lib clbi
-    UHC  -> UHC.buildLib    verbosity         pkg_descr lbi lib clbi
+    JHC   -> JHC.buildLib   verbosity         pkg_descr lbi lib clbi
+    LHC   -> LHC.buildLib   verbosity         pkg_descr lbi lib clbi
+    UHC   -> UHC.buildLib   verbosity         pkg_descr lbi lib clbi
     HaskellSuite {} -> HaskellSuite.buildLib verbosity pkg_descr lbi lib clbi
     _    -> die "Building is not supported with this compiler."
 
@@ -479,8 +495,6 @@ buildExe verbosity numJobs pkg_descr lbi exe clbi =
     GHCJS -> GHCJS.buildExe verbosity numJobs pkg_descr lbi exe clbi
     JHC   -> JHC.buildExe   verbosity         pkg_descr lbi exe clbi
     LHC   -> LHC.buildExe   verbosity         pkg_descr lbi exe clbi
-    Hugs  -> Hugs.buildExe  verbosity         pkg_descr lbi exe clbi
-    NHC   -> NHC.buildExe   verbosity         pkg_descr lbi exe clbi
     UHC   -> UHC.buildExe   verbosity         pkg_descr lbi exe clbi
     _     -> die "Building is not supported with this compiler."
 

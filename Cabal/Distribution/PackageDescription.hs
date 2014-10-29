@@ -1,4 +1,6 @@
 {-# LANGUAGE DeriveDataTypeable #-}
+{-# LANGUAGE DeriveGeneric #-}
+
 -----------------------------------------------------------------------------
 -- |
 -- Module      :  Distribution.PackageDescription
@@ -31,8 +33,14 @@ module Distribution.PackageDescription (
         BuildType(..),
         knownBuildTypes,
 
+        -- ** Renaming
+        ModuleRenaming(..),
+        defaultRenaming,
+        lookupRenaming,
+
         -- ** Libraries
         Library(..),
+        ModuleReexport(..),
         emptyLibrary,
         withLib,
         hasLibs,
@@ -97,25 +105,29 @@ module Distribution.PackageDescription (
         knownRepoTypes,
   ) where
 
+import Data.Binary (Binary)
 import Data.Data   (Data)
 import Data.List   (nub, intercalate)
 import Data.Maybe  (fromMaybe, maybeToList)
 import Data.Monoid (Monoid(mempty, mappend))
 import Data.Typeable ( Typeable )
 import Control.Monad (MonadPlus(mplus))
+import GHC.Generics (Generic)
 import Text.PrettyPrint as Disp
 import qualified Distribution.Compat.ReadP as Parse
+import Distribution.Compat.ReadP ((<++))
 import qualified Data.Char as Char (isAlphaNum, isDigit, toLower)
+import qualified Data.Map as Map
+import Data.Map (Map)
 
 import Distribution.Package
          ( PackageName(PackageName), PackageIdentifier(PackageIdentifier)
-         , Dependency, Package(..) )
+         , Dependency, Package(..), PackageName, packageName )
 import Distribution.ModuleName ( ModuleName )
-import Distribution.ModuleExport ( ModuleExport )
 import Distribution.Version
          ( Version(Version), VersionRange, anyVersion, orLaterVersion
          , asVersionIntervals, LowerBound(..) )
-import Distribution.License  (License(AllRightsReserved))
+import Distribution.License  (License(UnspecifiedLicense))
 import Distribution.Compiler (CompilerFlavor)
 import Distribution.System   (OS, Arch)
 import Distribution.Text
@@ -153,6 +165,17 @@ data PackageDescription
         customFieldsPD :: [(String,String)], -- ^Custom fields starting
                                              -- with x-, stored in a
                                              -- simple assoc-list.
+        -- | YOU PROBABLY DON'T WANT TO USE THIS FIELD. This field is
+        -- special! Depending on how far along processing the
+        -- PackageDescription we are, the contents of this field are
+        -- either nonsense, or the collected dependencies of *all* the
+        -- components in this package.  buildDepends is initialized by
+        -- 'finalizePackageDescription' and 'flattenPackageDescription';
+        -- prior to that, dependency info is stored in the 'CondTree'
+        -- built around a 'GenericPackageDescription'.  When this
+        -- resolution is done, dependency info is written to the inner
+        -- 'BuildInfo' and this field.  This is all horrible, and #2066
+        -- tracks progress to get rid of this field.
         buildDepends   :: [Dependency],
         -- | The version of the Cabal spec that this package description uses.
         -- For historical reasons this is specified with a version range but
@@ -171,7 +194,9 @@ data PackageDescription
         extraTmpFiles  :: [FilePath],
         extraDocFiles  :: [FilePath]
     }
-    deriving (Show, Read, Eq, Typeable, Data)
+    deriving (Generic, Show, Read, Eq, Typeable, Data)
+
+instance Binary PackageDescription
 
 instance Package PackageDescription where
   packageId = package
@@ -207,7 +232,7 @@ emptyPackageDescription
     =  PackageDescription {
                       package      = PackageIdentifier (PackageName "")
                                                        (Version [] []),
-                      license      = AllRightsReserved,
+                      license      = UnspecifiedLicense,
                       licenseFiles = [],
                       specVersionRaw = Right anyVersion,
                       buildType    = Nothing,
@@ -249,7 +274,9 @@ data BuildType
                 --   be built. Doing it this way rather than just giving a
                 --   parse error means we get better error messages and allows
                 --   you to inspect the rest of the package description.
-                deriving (Show, Read, Eq, Typeable, Data)
+                deriving (Generic, Show, Read, Eq, Typeable, Data)
+
+instance Binary BuildType
 
 knownBuildTypes :: [BuildType]
 knownBuildTypes = [Simple, Configure, Make, Custom]
@@ -268,15 +295,79 @@ instance Text BuildType where
       _           -> UnknownBuildType name
 
 -- ---------------------------------------------------------------------------
+-- Module renaming
+
+-- | Renaming applied to the modules provided by a package.
+-- The boolean indicates whether or not to also include all of the
+-- original names of modules.  Thus, @ModuleRenaming False []@ is
+-- "don't expose any modules, and @ModuleRenaming True [("Data.Bool", "Bool")]@
+-- is, "expose all modules, but also expose @Data.Bool@ as @Bool@".
+--
+data ModuleRenaming = ModuleRenaming Bool [(ModuleName, ModuleName)]
+    deriving (Show, Read, Eq, Ord, Typeable, Data, Generic)
+
+defaultRenaming :: ModuleRenaming
+defaultRenaming = ModuleRenaming True []
+
+lookupRenaming :: Package pkg => pkg -> Map PackageName ModuleRenaming -> ModuleRenaming
+lookupRenaming pkg rns =
+    Map.findWithDefault
+        (error ("lookupRenaming: missing renaming for " ++ display (packageName pkg)))
+        (packageName pkg) rns
+
+instance Binary ModuleRenaming where
+
+instance Monoid ModuleRenaming where
+    ModuleRenaming b rns `mappend` ModuleRenaming b' rns'
+        = ModuleRenaming (b || b') (rns ++ rns') -- ToDo: dedupe?
+    mempty = ModuleRenaming False []
+
+-- NB: parentheses are mandatory, because later we may extend this syntax
+-- to allow "hiding (A, B)" or other modifier words.
+instance Text ModuleRenaming where
+  disp (ModuleRenaming True []) = Disp.empty
+  disp (ModuleRenaming b vs) = (if b then text "with" else Disp.empty) <+> dispRns
+    where dispRns = Disp.parens
+                         (Disp.hsep
+                            (Disp.punctuate Disp.comma (map dispEntry vs)))
+          dispEntry (orig, new)
+            | orig == new = disp orig
+            | otherwise = disp orig <+> text "as" <+> disp new
+
+  parse = do Parse.string "with" >> Parse.skipSpaces
+             fmap (ModuleRenaming True) parseRns
+         <++ fmap (ModuleRenaming False) parseRns
+         <++ return (ModuleRenaming True [])
+    where parseRns = do
+             rns <- Parse.between (Parse.char '(') (Parse.char ')') parseList
+             Parse.skipSpaces
+             return rns
+          parseList =
+            Parse.sepBy parseEntry (Parse.char ',' >> Parse.skipSpaces)
+          parseEntry :: Parse.ReadP r (ModuleName, ModuleName)
+          parseEntry = do
+            orig <- parse
+            Parse.skipSpaces
+            (do _ <- Parse.string "as"
+                Parse.skipSpaces
+                new <- parse
+                Parse.skipSpaces
+                return (orig, new)
+             <++
+                return (orig, orig))
+
+-- ---------------------------------------------------------------------------
 -- The Library type
 
 data Library = Library {
         exposedModules    :: [ModuleName],
-        reexportedModules :: [ModuleExport ModuleName],
+        reexportedModules :: [ModuleReexport],
         libExposed        :: Bool, -- ^ Is the lib to be exposed by default?
         libBuildInfo      :: BuildInfo
     }
-    deriving (Show, Eq, Read, Typeable, Data)
+    deriving (Generic, Show, Eq, Read, Typeable, Data)
+
+instance Binary Library
 
 instance Monoid Library where
   mempty = Library {
@@ -320,6 +411,39 @@ libModules :: Library -> [ModuleName]
 libModules lib = exposedModules lib
               ++ otherModules (libBuildInfo lib)
 
+-- -----------------------------------------------------------------------------
+-- Module re-exports
+
+data ModuleReexport = ModuleReexport {
+       moduleReexportOriginalPackage :: Maybe PackageName,
+       moduleReexportOriginalName    :: ModuleName,
+       moduleReexportName            :: ModuleName
+    }
+    deriving (Eq, Generic, Read, Show, Typeable, Data)
+
+instance Binary ModuleReexport
+
+instance Text ModuleReexport where
+    disp (ModuleReexport mpkgname origname newname) =
+          maybe Disp.empty (\pkgname -> disp pkgname <> Disp.char ':') mpkgname
+       <> disp origname
+      <+> if newname == origname
+            then Disp.empty
+            else Disp.text "as" <+> disp newname
+
+    parse = do
+      mpkgname <- Parse.option Nothing $ do
+                    pkgname <- parse 
+                    _       <- Parse.char ':'
+                    return (Just pkgname)
+      origname <- parse
+      newname  <- Parse.option origname $ do
+                    Parse.skipSpaces
+                    _ <- Parse.string "as"
+                    Parse.skipSpaces
+                    parse
+      return (ModuleReexport mpkgname origname newname)
+
 -- ---------------------------------------------------------------------------
 -- The Executable type
 
@@ -328,7 +452,9 @@ data Executable = Executable {
         modulePath :: FilePath,
         buildInfo  :: BuildInfo
     }
-    deriving (Show, Read, Eq, Typeable, Data)
+    deriving (Generic, Show, Read, Eq, Typeable, Data)
+
+instance Binary Executable
 
 instance Monoid Executable where
   mempty = Executable {
@@ -382,7 +508,9 @@ data TestSuite = TestSuite {
         -- a better solution is waiting on the next overhaul to the
         -- GenericPackageDescription -> PackageDescription resolution process.
     }
-    deriving (Show, Read, Eq, Typeable, Data)
+    deriving (Generic, Show, Read, Eq, Typeable, Data)
+
+instance Binary TestSuite
 
 -- | The test suite interfaces that are currently defined. Each test suite must
 -- specify which interface it supports.
@@ -408,7 +536,9 @@ data TestSuiteInterface =
      -- the given reason (e.g. unknown test type).
      --
    | TestSuiteUnsupported TestType
-   deriving (Eq, Read, Show, Typeable, Data)
+   deriving (Eq, Generic, Read, Show, Typeable, Data)
+
+instance Binary TestSuiteInterface
 
 instance Monoid TestSuite where
     mempty = TestSuite {
@@ -464,7 +594,9 @@ testModules test = (case testInterface test of
 data TestType = TestTypeExe Version     -- ^ \"type: exitcode-stdio-x.y\"
               | TestTypeLib Version     -- ^ \"type: detailed-x.y\"
               | TestTypeUnknown String Version -- ^ Some unknown test type e.g. \"type: foo\"
-    deriving (Show, Read, Eq, Typeable, Data)
+    deriving (Generic, Show, Read, Eq, Typeable, Data)
+
+instance Binary TestType
 
 knownTestTypes :: [TestType]
 knownTestTypes = [ TestTypeExe (Version [1,0] [])
@@ -513,7 +645,9 @@ data Benchmark = Benchmark {
         benchmarkEnabled   :: Bool
         -- TODO: See TODO for 'testEnabled'.
     }
-    deriving (Show, Read, Eq, Typeable, Data)
+    deriving (Generic, Show, Read, Eq, Typeable, Data)
+
+instance Binary Benchmark
 
 -- | The benchmark interfaces that are currently defined. Each
 -- benchmark must specify which interface it supports.
@@ -535,7 +669,9 @@ data BenchmarkInterface =
      -- interfaces for the given reason (e.g. unknown benchmark type).
      --
    | BenchmarkUnsupported BenchmarkType
-   deriving (Eq, Read, Show, Typeable, Data)
+   deriving (Eq, Generic, Read, Show, Typeable, Data)
+
+instance Binary BenchmarkInterface
 
 instance Monoid Benchmark where
     mempty = Benchmark {
@@ -589,7 +725,9 @@ data BenchmarkType = BenchmarkTypeExe Version
                      -- ^ \"type: exitcode-stdio-x.y\"
                    | BenchmarkTypeUnknown String Version
                      -- ^ Some unknown benchmark type e.g. \"type: foo\"
-    deriving (Show, Read, Eq, Typeable, Data)
+    deriving (Generic, Show, Read, Eq, Typeable, Data)
+
+instance Binary BenchmarkType
 
 knownBenchmarkTypes :: [BenchmarkType]
 knownBenchmarkTypes = [ BenchmarkTypeExe (Version [1,0] []) ]
@@ -632,6 +770,7 @@ data BuildInfo = BuildInfo {
         oldExtensions     :: [Extension],   -- ^ the old extensions field, treated same as 'defaultExtensions'
 
         extraLibs         :: [String], -- ^ what libraries to link with when compiling a program that uses your package
+        extraGHCiLibs     :: [String], -- ^ if present, overrides extraLibs when package is loaded with GHCi.
         extraLibDirs      :: [String],
         includeDirs       :: [FilePath], -- ^directories to find .h files
         includes          :: [FilePath], -- ^ The .h files to be found in includeDirs
@@ -642,9 +781,12 @@ data BuildInfo = BuildInfo {
         customFieldsBI    :: [(String,String)], -- ^Custom fields starting
                                                 -- with x-, stored in a
                                                 -- simple assoc-list.
-        targetBuildDepends :: [Dependency] -- ^ Dependencies specific to a library or executable target
+        targetBuildDepends :: [Dependency], -- ^ Dependencies specific to a library or executable target
+        targetBuildRenaming :: Map PackageName ModuleRenaming
     }
-    deriving (Show,Read,Eq,Typeable,Data)
+    deriving (Generic, Show, Read, Eq, Typeable, Data)
+
+instance Binary BuildInfo
 
 instance Monoid BuildInfo where
   mempty = BuildInfo {
@@ -665,6 +807,7 @@ instance Monoid BuildInfo where
     otherExtensions   = [],
     oldExtensions     = [],
     extraLibs         = [],
+    extraGHCiLibs     = [],
     extraLibDirs      = [],
     includeDirs       = [],
     includes          = [],
@@ -673,7 +816,8 @@ instance Monoid BuildInfo where
     profOptions       = [],
     sharedOptions     = [],
     customFieldsBI    = [],
-    targetBuildDepends = []
+    targetBuildDepends = [],
+    targetBuildRenaming = Map.empty
   }
   mappend a b = BuildInfo {
     buildable         = buildable a && buildable b,
@@ -693,6 +837,7 @@ instance Monoid BuildInfo where
     otherExtensions   = combineNub otherExtensions,
     oldExtensions     = combineNub oldExtensions,
     extraLibs         = combine    extraLibs,
+    extraGHCiLibs     = combine    extraGHCiLibs,
     extraLibDirs      = combineNub extraLibDirs,
     includeDirs       = combineNub includeDirs,
     includes          = combineNub includes,
@@ -701,12 +846,14 @@ instance Monoid BuildInfo where
     profOptions       = combine    profOptions,
     sharedOptions     = combine    sharedOptions,
     customFieldsBI    = combine    customFieldsBI,
-    targetBuildDepends = combineNub targetBuildDepends
+    targetBuildDepends = combineNub targetBuildDepends,
+    targetBuildRenaming = combineMap targetBuildRenaming
   }
     where
       combine    field = field a `mappend` field b
       combineNub field = nub (combine field)
       combineMby field = field b `mplus` field a
+      combineMap field = Map.unionWith mappend (field a) (field b)
 
 emptyBuildInfo :: BuildInfo
 emptyBuildInfo = mempty
@@ -830,7 +977,9 @@ data SourceRepo = SourceRepo {
   -- given the default is \".\" ie no subdirectory.
   repoSubdir   :: Maybe FilePath
 }
-  deriving (Eq, Read, Show, Typeable, Data)
+  deriving (Eq, Generic, Read, Show, Typeable, Data)
+
+instance Binary SourceRepo
 
 -- | What this repo info is for, what it represents.
 --
@@ -846,7 +995,9 @@ data RepoKind =
   | RepoThis
 
   | RepoKindUnknown String
-  deriving (Eq, Ord, Read, Show, Typeable, Data)
+  deriving (Eq, Generic, Ord, Read, Show, Typeable, Data)
+
+instance Binary RepoKind
 
 -- | An enumeration of common source control systems. The fields used in the
 -- 'SourceRepo' depend on the type of repo. The tools and methods used to
@@ -855,7 +1006,9 @@ data RepoKind =
 data RepoType = Darcs | Git | SVN | CVS
               | Mercurial | GnuArch | Bazaar | Monotone
               | OtherRepoType String
-  deriving (Eq, Ord, Read, Show, Typeable, Data)
+  deriving (Eq, Generic, Ord, Read, Show, Typeable, Data)
+
+instance Binary RepoType
 
 knownRepoTypes :: [RepoType]
 knownRepoTypes = [Darcs, Git, SVN, CVS
@@ -957,7 +1110,9 @@ data Flag = MkFlag
 
 -- | A 'FlagName' is the name of a user-defined configuration flag
 newtype FlagName = FlagName String
-    deriving (Eq, Ord, Show, Read, Typeable, Data)
+    deriving (Eq, Generic, Ord, Show, Read, Typeable, Data)
+
+instance Binary FlagName
 
 -- | A 'FlagAssignment' is a total or partial mapping of 'FlagName's to
 -- 'Bool' flag values. It represents the flags chosen by the user or

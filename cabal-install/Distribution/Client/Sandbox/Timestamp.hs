@@ -16,6 +16,7 @@ module Distribution.Client.Sandbox.Timestamp (
   listModifiedDeps,
   ) where
 
+import Control.Exception                             (IOException)
 import Control.Monad                                 (filterM, forM, when)
 import Data.Char                                     (isSpace)
 import Data.List                                     (partition)
@@ -40,14 +41,13 @@ import Distribution.Version                          (Version (..),
                                                       orLaterVersion)
 
 import Distribution.Client.Sandbox.Index
-  (ListIgnoredBuildTreeRefs (DontListIgnored), RefTypesToList(OnlyLinks)
+  (ListIgnoredBuildTreeRefs (ListIgnored), RefTypesToList(OnlyLinks)
   ,listBuildTreeRefs)
 import Distribution.Client.SetupWrapper              (SetupScriptOptions (..),
                                                       defaultSetupScriptOptions,
                                                       setupWrapper)
-import Distribution.Client.Utils                     (inDir, removeExistingFile,
-                                                      tryCanonicalizePath,
-                                                      tryFindAddSourcePackageDesc)
+import Distribution.Client.Utils
+  (inDir, removeExistingFile, tryCanonicalizePath, tryFindAddSourcePackageDesc)
 
 import Distribution.Compat.Exception                 (catchIO)
 import Distribution.Client.Compat.Time               (EpochTime, getCurTime,
@@ -141,15 +141,16 @@ maybeAddCompilerTimestampRecord :: Verbosity -> FilePath -> FilePath
                                    -> IO ()
 maybeAddCompilerTimestampRecord verbosity sandboxDir indexFile
                                 compId platform = do
-  buildTreeRefs <- listBuildTreeRefs verbosity DontListIgnored OnlyLinks
-                                     indexFile
+  let key = timestampRecordKey compId platform
   withTimestampFile sandboxDir $ \timestampRecords -> do
-    let key = timestampRecordKey compId platform
     case lookup key timestampRecords of
       Just _  -> return timestampRecords
-      Nothing -> do now <- getCurTime
-                    let timestamps = map (\p -> (p, now)) buildTreeRefs
-                    return $ (key, timestamps):timestampRecords
+      Nothing -> do
+        buildTreeRefs <- listBuildTreeRefs verbosity ListIgnored OnlyLinks
+                         indexFile
+        now <- getCurTime
+        let timestamps = map (\p -> (p, now)) buildTreeRefs
+        return $ (key, timestamps):timestampRecords
 
 -- | Given an IO action that returns a list of build tree refs, add those
 -- build tree refs to the timestamps file (for all compilers).
@@ -234,13 +235,16 @@ allPackageSourceFiles verbosity packageDir = inDir (Just packageDir) $ do
         srcs <- fmap lines . readFile $ file
         mapM tryCanonicalizePath srcs
 
-      onFailedListSources :: IO ()
-      onFailedListSources = warn verbosity $
+      onFailedListSources :: IOException -> IO ()
+      onFailedListSources e = do
+        warn verbosity $
           "Could not list sources of the add-source dependency '"
           ++ display (packageName pkg) ++ "'. Skipping the timestamp check."
+        debug verbosity $
+          "Exception was: " ++ show e
 
   -- Run setup sdist --list-sources=TMPFILE
-  ret <- doListSources `catchIO` (\_ -> onFailedListSources >> return [])
+  ret <- doListSources `catchIO` (\e -> onFailedListSources e >> return [])
   removeExistingFile file
   return ret
 

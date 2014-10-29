@@ -33,7 +33,9 @@ module Distribution.Client.Config (
     haddockFlagsFields,
     installDirsFields,
     withProgramsFields,
-    withProgramOptionsFields
+    withProgramOptionsFields,
+    userConfigDiff,
+    userConfigUpdate
   ) where
 
 import Distribution.Client.Types
@@ -47,6 +49,8 @@ import Distribution.Client.Setup
          , UploadFlags(..), uploadCommand
          , ReportFlags(..), reportCommand
          , showRepo, parseRepo )
+import Distribution.Utils.NubList
+         ( fromNubList, toNubList)
 
 import Distribution.Simple.Compiler
          ( OptimisationLevel(..) )
@@ -77,20 +81,20 @@ import Distribution.Simple.Command
 import Distribution.Simple.Program
          ( defaultProgramConfiguration )
 import Distribution.Simple.Utils
-         ( notice, warn, lowercase )
+         ( die, notice, warn, lowercase, cabalVersion )
 import Distribution.Compiler
          ( CompilerFlavor(..), defaultCompilerFlavor )
 import Distribution.Verbosity
          ( Verbosity, normal )
 
 import Data.List
-         ( partition, find )
+         ( partition, find, foldl' )
 import Data.Maybe
          ( fromMaybe )
 import Data.Monoid
          ( Monoid(..) )
 import Control.Monad
-         ( unless, foldM, liftM )
+         ( unless, foldM, liftM, liftM2 )
 import qualified Distribution.Compat.ReadP as Parse
          ( option )
 import qualified Text.PrettyPrint as Disp
@@ -109,6 +113,13 @@ import Distribution.Compat.Environment
          ( getEnvironment )
 import Distribution.Compat.Exception
          ( catchIO )
+import qualified Paths_cabal_install
+         ( version )
+import Data.Version
+         ( showVersion )
+import Data.Char
+         ( isSpace )
+import qualified Data.Map as M
 
 --
 -- * Configuration saved in the config file
@@ -213,14 +224,14 @@ initialSavedConfig = do
   return mempty {
     savedGlobalFlags     = mempty {
       globalCacheDir     = toFlag cacheDir,
-      globalRemoteRepos  = [defaultRemoteRepo],
+      globalRemoteRepos  = toNubList [defaultRemoteRepo],
       globalWorldFile    = toFlag worldFile
     },
     savedConfigureFlags  = mempty {
-      configProgramPathExtra = extraPath
+      configProgramPathExtra = toNubList extraPath
     },
     savedInstallFlags    = mempty {
-      installSummaryFile = [toPathTemplate (logsDir </> "build.log")],
+      installSummaryFile = toNubList [toPathTemplate (logsDir </> "build.log")],
       installBuildReports= toFlag AnonymousReports,
       installNumJobs     = toFlag Nothing
     }
@@ -303,11 +314,9 @@ loadConfig verbosity configFileFlag userInstallFlag = addBaseConf $ do
       return conf
     Just (ParseFailed err) -> do
       let (line, msg) = locatedErrorMsg err
-      warn verbosity $
+      die $
           "Error parsing config file " ++ configFile
         ++ maybe "" (\n -> ':' : show n) line ++ ":\n" ++ msg
-      warn verbosity "Using default configuration."
-      initialSavedConfig
 
   where
     addBaseConf body = do
@@ -341,6 +350,9 @@ writeConfigFile file comments vals = do
       ,"-- Lines (like this one) beginning with '--' are comments."
       ,"-- Be careful with spaces and indentation because they are"
       ,"-- used to indicate layout for nested sections."
+      ,""
+      ,"-- Cabal library version: " ++ showVersion cabalVersion
+      ,"-- cabal-install version: " ++ showVersion Paths_cabal_install.version
       ,"",""
       ]
 
@@ -378,7 +390,7 @@ configFieldDescriptions =
 
   ++ toSavedConfig liftConfigFlag
        (configureOptions ParseArgs)
-       (["builddir", "configure-option", "constraint", "dependency"]
+       (["builddir", "constraint", "dependency"]
         ++ map fieldName installDirsFields)
 
         --FIXME: this is only here because viewAsFieldDescr gives us a parser
@@ -451,7 +463,8 @@ deprecatedFieldDescriptions =
   [ liftGlobalFlag $
     listField "repos"
       (Disp.text . showRepo) parseRepo
-      globalRemoteRepos (\rs cfg -> cfg { globalRemoteRepos = rs })
+      (fromNubList . globalRemoteRepos)
+      (\rs cfg -> cfg { globalRemoteRepos = toNubList rs })
   , liftGlobalFlag $
     simpleField "cachedir"
       (Disp.text . fromFlagOrDefault "") (optional parseFilePathQ)
@@ -524,10 +537,7 @@ parseConfig initial = \str -> do
        configProgramPaths  = paths,
        configProgramArgs   = args
        },
-    savedHaddockFlags      = haddockFlags {
-       haddockProgramPaths = paths,
-       haddockProgramArgs  = args
-       },
+    savedHaddockFlags      = haddockFlags,
     savedUserInstallDirs   = user,
     savedGlobalInstallDirs = global
   }
@@ -632,3 +642,60 @@ withProgramOptionsFields :: [FieldDescr [(String, [String])]]
 withProgramOptionsFields =
   map viewAsFieldDescr $
   programConfigurationOptions defaultProgramConfiguration ParseArgs id (++)
+
+-- | Get the differences (as a pseudo code diff) between the user's
+-- '~/.cabal/config' and the one that cabal would generate if it didn't exist.
+userConfigDiff :: GlobalFlags -> IO [String]
+userConfigDiff globalFlags = do
+  userConfig <- loadConfig normal (globalConfigFile globalFlags) mempty
+  testConfig <- liftM2 mappend baseSavedConfig initialSavedConfig
+  return $ reverse . foldl' createDiff [] . M.toList
+                $ M.unionWith combine
+                    (M.fromList . map justFst $ filterShow testConfig)
+                    (M.fromList . map justSnd $ filterShow userConfig)
+  where
+    justFst (a, b) = (a, (Just b, Nothing))
+    justSnd (a, b) = (a, (Nothing, Just b))
+
+    combine (Nothing, Just b) (Just a, Nothing) = (Just a, Just b)
+    combine (Just a, Nothing) (Nothing, Just b) = (Just a, Just b)
+    combine x y = error $ "Can't happen : userConfigDiff " ++ show x ++ " " ++ show y
+
+    createDiff :: [String] -> (String, (Maybe String, Maybe String)) -> [String]
+    createDiff acc (key, (Just a, Just b))
+        | a == b = acc
+        | otherwise = ("+ " ++ key ++ ": " ++ b) : ("- " ++ key ++ ": " ++ a) : acc
+    createDiff acc (key, (Nothing, Just b)) = ("+ " ++ key ++ ": " ++ b) : acc
+    createDiff acc (key, (Just a, Nothing)) = ("- " ++ key ++ ": " ++ a) : acc
+    createDiff acc (_, (Nothing, Nothing)) = acc
+
+    filterShow :: SavedConfig -> [(String, String)]
+    filterShow cfg = map keyValueSplit
+        . filter (\s -> not (null s) && any (== ':') s)
+        . map nonComment
+        . lines
+        $ showConfig cfg
+
+    nonComment [] = []
+    nonComment ('-':'-':_) = []
+    nonComment (x:xs) = x : nonComment xs
+
+    topAndTail = reverse . dropWhile isSpace . reverse . dropWhile isSpace
+
+    keyValueSplit s =
+        let (left, right) = break (== ':') s
+        in (topAndTail left, topAndTail (drop 1 right))
+
+
+-- | Update the user's ~/.cabal/config' keeping the user's customizations.
+userConfigUpdate :: Verbosity -> GlobalFlags -> IO ()
+userConfigUpdate verbosity globalFlags = do
+  userConfig <- loadConfig normal (globalConfigFile globalFlags) mempty
+  newConfig <- liftM2 mappend baseSavedConfig initialSavedConfig
+  commentConf <- commentSavedConfig
+  cabalFile <- defaultConfigFile
+  let backup = cabalFile ++ ".backup"
+  notice verbosity $ "Renaming " ++ cabalFile ++ " to " ++ backup ++ "."
+  renameFile cabalFile backup
+  notice verbosity $ "Writing merged config to " ++ cabalFile ++ "."
+  writeConfigFile cabalFile commentConf (newConfig `mappend` userConfig)

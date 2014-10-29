@@ -1,4 +1,10 @@
-{-# LANGUAGE CPP, DeriveDataTypeable, StandaloneDeriving #-}
+{-# LANGUAGE CPP, DeriveDataTypeable #-}
+{-# LANGUAGE DeriveGeneric #-}
+#if __GLASGOW_HASKELL__ < 707
+{-# LANGUAGE StandaloneDeriving #-}
+#endif
+{-# OPTIONS_GHC -fno-warn-orphans #-}
+
 -----------------------------------------------------------------------------
 -- |
 -- Module      :  Distribution.Version
@@ -65,9 +71,11 @@ module Distribution.Version (
 
  ) where
 
+import Data.Binary      ( Binary(..) )
 import Data.Data        ( Data )
 import Data.Typeable    ( Typeable )
 import Data.Version     ( Version(..) )
+import GHC.Generics     ( Generic )
 
 import Distribution.Text ( Text(..) )
 import qualified Distribution.Compat.ReadP as Parse
@@ -92,12 +100,25 @@ data VersionRange
   | UnionVersionRanges     VersionRange VersionRange
   | IntersectVersionRanges VersionRange VersionRange
   | VersionRangeParens     VersionRange -- just '(exp)' parentheses syntax
-  deriving (Show,Read,Eq,Typeable,Data)
+  deriving (Data, Eq, Generic, Read, Show, Typeable)
+
+instance Binary VersionRange
 
 #if __GLASGOW_HASKELL__ < 707
 -- starting with ghc-7.7/base-4.7 this instance is provided in "Data.Data"
 deriving instance Data Version
 #endif
+
+-- Deriving this instance from Generic gives trouble on GHC 7.2 because the
+-- Generic instance has to be standalone-derived. So, we hand-roll our own.
+-- We can't use a generic Binary instance on later versions because we must
+-- maintain compatibility between compiler versions.
+instance Binary Version where
+    get = do
+        br <- get
+        tags <- get
+        return $ Version br tags
+    put v = put (versionBranch v) >> put (versionTags v)
 
 {-# DEPRECATED AnyVersion "Use 'anyVersion', 'foldVersionRange' or 'asVersionIntervals'" #-}
 {-# DEPRECATED ThisVersion "use 'thisVersion', 'foldVersionRange' or 'asVersionIntervals'" #-}
@@ -701,9 +722,11 @@ instance Text VersionRange where
                      return f)
         factor = Parse.choice $ parens expr
                               : parseAnyVersion
+                              : parseNoVersion
                               : parseWildcardRange
                               : map parseRangeOp rangeOps
         parseAnyVersion    = Parse.string "-any" >> return AnyVersion
+        parseNoVersion     = Parse.string "-none" >> return noVersion
 
         parseWildcardRange = do
           _ <- Parse.string "=="

@@ -1,4 +1,6 @@
 {-# LANGUAGE DeriveDataTypeable #-}
+{-# LANGUAGE DeriveGeneric #-}
+
 -----------------------------------------------------------------------------
 -- |
 -- Module      :  Distribution.License
@@ -51,9 +53,11 @@ import Distribution.Text (Text(..), display)
 import qualified Distribution.Compat.ReadP as Parse
 import qualified Text.PrettyPrint as Disp
 import Text.PrettyPrint ((<>))
+import Data.Binary (Binary)
 import qualified Data.Char as Char (isAlphaNum)
 import Data.Data (Data)
 import Data.Typeable (Typeable)
+import GHC.Generics (Generic)
 
 -- | Indicates the license under which a package's source code is released.
 -- Versions of the licenses not listed here will be rejected by Hackage and
@@ -101,16 +105,24 @@ data License =
     -- jurisdiction necessarily in the public domain elsewhere.
   | PublicDomain
 
-    -- | No license. The package may not be legally modified or redistributed by
-    -- anyone but the rightsholder.
+    -- | Explicitly 'All Rights Reserved', eg for proprietary software. The
+    -- package may not be legally modified or redistributed by anyone but the
+    -- rightsholder.
   | AllRightsReserved
+
+    -- | No license specified which legally defaults to 'All Rights Reserved'.
+    -- The package may not be legally modified or redistributed by anyone but
+    -- the rightsholder.
+  | UnspecifiedLicense
 
     -- | Any other software license.
   | OtherLicense
 
     -- | Indicates an erroneous license name.
   | UnknownLicense String
-  deriving (Read, Show, Eq, Typeable, Data)
+  deriving (Generic, Read, Show, Eq, Typeable, Data)
+
+instance Binary License
 
 -- | The list of all currently recognised licenses.
 knownLicenses :: [License]

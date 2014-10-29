@@ -1,4 +1,6 @@
 {-# LANGUAGE DeriveDataTypeable #-}
+{-# LANGUAGE DeriveGeneric #-}
+
 -----------------------------------------------------------------------------
 -- |
 -- Module      :  Distribution.System
@@ -32,11 +34,13 @@ module Distribution.System (
 import qualified System.Info (os, arch)
 import qualified Data.Char as Char (toLower, isAlphaNum)
 
+import Data.Binary (Binary)
 import Data.Data (Data)
 import Data.Typeable (Typeable)
 import Data.Maybe (fromMaybe, listToMaybe)
 import Distribution.Text (Text(..), display)
 import qualified Distribution.Compat.ReadP as Parse
+import GHC.Generics (Generic)
 import qualified Text.PrettyPrint as Disp
 import Text.PrettyPrint ((<>))
 
@@ -71,7 +75,9 @@ data OS = Linux | Windows | OSX        -- tier 1 desktop OSs
         | IOS                          -- iOS
         | Ghcjs
         | OtherOS String
-  deriving (Eq, Ord, Show, Read, Typeable, Data)
+  deriving (Eq, Generic, Ord, Show, Read, Typeable, Data)
+
+instance Binary OS
 
 --TODO: decide how to handle Android and iOS.
 -- They are like Linux and OSX but with some differences.
@@ -124,7 +130,9 @@ data Arch = I386  | X86_64 | PPC | PPC64 | Sparc
           | M68k  | Vax
           | JavaScript
           | OtherArch String
-  deriving (Eq, Ord, Show, Read, Typeable, Data)
+  deriving (Eq, Generic, Ord, Show, Read, Typeable, Data)
+
+instance Binary Arch
 
 knownArches :: [Arch]
 knownArches = [I386, X86_64, PPC, PPC64, Sparc
@@ -166,7 +174,9 @@ buildArch = classifyArch Permissive System.Info.arch
 -- ------------------------------------------------------------
 
 data Platform = Platform Arch OS
-  deriving (Eq, Ord, Show, Read, Typeable, Data)
+  deriving (Eq, Generic, Ord, Show, Read, Typeable, Data)
+
+instance Binary Platform
 
 instance Text Platform where
   disp (Platform arch os) = disp arch <> Disp.char '-' <> disp os

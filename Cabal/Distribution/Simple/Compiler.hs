@@ -1,3 +1,5 @@
+{-# LANGUAGE DeriveGeneric #-}
+
 -----------------------------------------------------------------------------
 -- |
 -- Module      :  Distribution.Simple.Compiler
@@ -43,6 +45,7 @@ module Distribution.Simple.Compiler (
         unsupportedExtensions,
         parmakeSupported,
         reexportedModulesSupported,
+        renamingPackageFlagsSupported,
         packageKeySupported
   ) where
 
@@ -52,9 +55,11 @@ import Distribution.Text (display)
 import Language.Haskell.Extension (Language(Haskell98), Extension)
 
 import Control.Monad (liftM)
+import Data.Binary (Binary)
 import Data.List (nub)
 import qualified Data.Map as M (Map, lookup)
 import Data.Maybe (catMaybes, isNothing)
+import GHC.Generics (Generic)
 import System.Directory (canonicalizePath)
 
 data Compiler = Compiler {
@@ -67,7 +72,9 @@ data Compiler = Compiler {
         compilerProperties      :: M.Map String String
         -- ^ A key-value map for properties not covered by the above fields.
     }
-    deriving (Show, Read)
+    deriving (Generic, Show, Read)
+
+instance Binary Compiler
 
 showCompilerId :: Compiler -> String
 showCompilerId = display . compilerId
@@ -96,7 +103,9 @@ compilerFlavorVersion hc comp = compilerFlavorVersion' (compilerId comp)
 data PackageDB = GlobalPackageDB
                | UserPackageDB
                | SpecificPackageDB FilePath
-    deriving (Eq, Ord, Show, Read)
+    deriving (Eq, Generic, Ord, Show, Read)
+
+instance Binary PackageDB
 
 -- | We typically get packages from several databases, and stack them
 -- together. This type lets us be explicit about that stacking. For example
@@ -140,13 +149,15 @@ absolutePackageDBPath (SpecificPackageDB db) =
 -- ------------------------------------------------------------
 
 -- | Some compilers support optimising. Some have different levels.
--- For compliers that do not the level is just capped to the level
+-- For compilers that do not the level is just capped to the level
 -- they do support.
 --
 data OptimisationLevel = NoOptimisation
                        | NormalOptimisation
                        | MaximumOptimisation
-    deriving (Eq, Show, Read, Enum, Bounded)
+    deriving (Bounded, Enum, Eq, Generic, Read, Show)
+
+instance Binary OptimisationLevel
 
 flagToOptimisationLevel :: Maybe String -> OptimisationLevel
 flagToOptimisationLevel Nothing  = NormalOptimisation
@@ -200,6 +211,10 @@ parmakeSupported = ghcSupported "Support parallel --make"
 -- | Does this compiler support reexported-modules?
 reexportedModulesSupported :: Compiler -> Bool
 reexportedModulesSupported = ghcSupported "Support reexported-modules"
+
+-- | Does this compiler support thinning/renaming on package flags?
+renamingPackageFlagsSupported :: Compiler -> Bool
+renamingPackageFlagsSupported = ghcSupported "Support thinning and renaming package flags"
 
 -- | Does this compiler support package keys?
 packageKeySupported :: Compiler -> Bool

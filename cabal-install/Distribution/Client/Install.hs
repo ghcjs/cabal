@@ -99,14 +99,15 @@ import qualified Distribution.InstalledPackageInfo as Installed
 import Distribution.Client.Compat.ExecutablePath
 import Distribution.Client.JobControl
 
+import Distribution.Utils.NubList
 import Distribution.Simple.Compiler
          ( CompilerId(..), Compiler(compilerId), compilerFlavor
-         , packageKeySupported , PackageDB(..), PackageDBStack )
+         , PackageDB(..), PackageDBStack )
 import Distribution.Simple.Program (ProgramConfiguration,
                                     defaultProgramConfiguration)
 import qualified Distribution.Simple.InstallDirs as InstallDirs
 import qualified Distribution.Simple.PackageIndex as PackageIndex
-import Distribution.Simple.PackageIndex (PackageIndex)
+import Distribution.Simple.PackageIndex (InstalledPackageIndex)
 import Distribution.Simple.Setup
          ( haddockCommand, HaddockFlags(..)
          , buildCommand, BuildFlags(..), emptyBuildFlags
@@ -124,7 +125,7 @@ import Distribution.Simple.InstallDirs as InstallDirs
          , initialPathTemplateEnv, installDirsTemplateEnv )
 import Distribution.Package
          ( PackageIdentifier(..), PackageId, packageName, packageVersion
-         , Package(..), PackageFixedDeps(..), PackageKey, mkPackageKey
+         , Package(..), PackageFixedDeps(..), PackageKey
          , Dependency(..), thisPackageVersion, InstalledPackageId )
 import qualified Distribution.PackageDescription as PackageDescription
 import Distribution.PackageDescription
@@ -216,7 +217,7 @@ install verbosity packageDBs repos comp platform conf useSandbox mSandboxPkgInfo
 
 -- TODO: Make InstallContext a proper data type with documented fields.
 -- | Common context for makeInstallPlan and processInstallPlan.
-type InstallContext = ( PackageIndex, SourcePackageDb
+type InstallContext = ( InstalledPackageIndex, SourcePackageDb
                       , [UserTarget], [PackageSpecifier SourcePackage] )
 
 -- TODO: Make InstallArgs a proper data type with documented fields or just get
@@ -312,7 +313,7 @@ planPackages :: Compiler
              -> ConfigFlags
              -> ConfigExFlags
              -> InstallFlags
-             -> PackageIndex
+             -> InstalledPackageIndex
              -> SourcePackageDb
              -> [PackageSpecifier SourcePackage]
              -> Progress String String InstallPlan
@@ -430,7 +431,7 @@ pruneInstallPlan pkgSpecifiers =
 -- either requested or needed.
 checkPrintPlan :: Verbosity
                -> Compiler
-               -> PackageIndex
+               -> InstalledPackageIndex
                -> InstallPlan
                -> SourcePackageDb
                -> InstallFlags
@@ -506,7 +507,7 @@ checkPrintPlan verbosity comp installed installPlan sourcePkgDb
     overrideReinstall = fromFlag (installOverrideReinstall installFlags)
 
 linearizeInstallPlan :: Compiler
-                     -> PackageIndex
+                     -> InstalledPackageIndex
                      -> InstallPlan
                      -> [(ReadyPackage, PackageStatus)]
 linearizeInstallPlan comp installedPkgIndex plan =
@@ -536,7 +537,7 @@ extractReinstalls :: PackageStatus -> [InstalledPackageId]
 extractReinstalls (Reinstall ipids _) = ipids
 extractReinstalls _                   = []
 
-packageStatus :: Compiler -> PackageIndex -> ReadyPackage -> PackageStatus
+packageStatus :: Compiler -> InstalledPackageIndex -> ReadyPackage -> PackageStatus
 packageStatus _comp installedPkgIndex cpkg =
   case PackageIndex.lookupPackageName installedPkgIndex
                                       (packageName cpkg) of
@@ -674,7 +675,7 @@ reportPlanningFailure verbosity
         ++ intercalate "," (map display pkgids)
 
     -- Save reports
-    BuildReports.storeLocal (installSummaryFile installFlags) buildReports platform
+    BuildReports.storeLocal (fromNubList $ installSummaryFile installFlags) buildReports platform
 
     -- Save solver log
     case logFile of
@@ -739,7 +740,7 @@ postInstallActions verbosity
       | UserTargetNamed dep <- targets ]
 
   let buildReports = BuildReports.fromInstallPlan installPlan
-  BuildReports.storeLocal (installSummaryFile installFlags) buildReports
+  BuildReports.storeLocal (fromNubList $ installSummaryFile installFlags) buildReports
     (InstallPlan.planPlatform installPlan)
   when (reportingLevel >= AnonymousReports) $
     BuildReports.storeAnonymous buildReports
@@ -841,7 +842,7 @@ regenerateHaddockIndex verbosity packageDBs comp platform conf useSandbox
                              && all (not . isSpecificPackageDB) packageDBs
 
         installedDocs (InstallPlan.Installed _ (BuildOk DocsOk _ _)) = True
-        installedDocs _                                            = False
+        installedDocs _                                              = False
         isSpecificPackageDB (SpecificPackageDB _) = True
         isSpecificPackageDB _                     = False
 
@@ -960,7 +961,7 @@ type UseLogFile = Maybe (PackageIdentifier -> PackageKey -> FilePath, Verbosity)
 
 performInstallations :: Verbosity
                      -> InstallArgs
-                     -> PackageIndex
+                     -> InstalledPackageIndex
                      -> InstallPlan
                      -> IO InstallPlan
 performInstallations verbosity

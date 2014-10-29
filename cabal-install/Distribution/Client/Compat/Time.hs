@@ -11,12 +11,16 @@ import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds, posixDayLength)
 import Data.Time (getCurrentTime, diffUTCTime)
 #else
 import System.Time (ClockTime(..), getClockTime
-                   ,diffClockTimes, normalizeTimeDiff, tdDay)
+                   ,diffClockTimes, normalizeTimeDiff, tdDay, tdHour)
 #endif
 
 #if defined mingw32_HOST_OS
 
+#if MIN_VERSION_base(4,7,0)
+import Data.Bits          ((.|.), finiteBitSize, unsafeShiftL)
+#else
 import Data.Bits          ((.|.), bitSize, unsafeShiftL)
+#endif
 import Data.Int           (Int32)
 import Data.Word          (Word64)
 import Foreign            (allocaBytes, peekByteOff)
@@ -46,11 +50,7 @@ index_WIN32_FILE_ATTRIBUTE_DATA_ftLastWriteTime_dwHighDateTime = 24
 
 #else
 
-#if MIN_VERSION_base(4,5,0)
 import Foreign.C.Types    (CTime(..))
-#else
-import Foreign.C.Types    (CTime)
-#endif
 import System.Posix.Files (getFileStatus, modificationTime)
 
 #endif
@@ -87,8 +87,13 @@ getModTime path = allocaBytes size_WIN32_FILE_ATTRIBUTE_DATA $ \info -> do
           windowsTimeToPOSIXSeconds dwLow dwHigh =
             let wINDOWS_TICK      = 10000000
                 sEC_TO_UNIX_EPOCH = 11644473600
+#if MIN_VERSION_base(4,7,0)
+                qwTime = (fromIntegral dwHigh `unsafeShiftL` finiteBitSize dwHigh)
+                         .|. (fromIntegral dwLow)
+#else
                 qwTime = (fromIntegral dwHigh `unsafeShiftL` bitSize dwHigh)
                          .|. (fromIntegral dwLow)
+#endif
                 res    = ((qwTime :: Word64) `div` wINDOWS_TICK)
                          - sEC_TO_UNIX_EPOCH
             -- TODO: What if the result is not representable as POSIX seconds?
@@ -110,17 +115,17 @@ getModTime path = do
 #endif
 
 -- | Return age of given file in days.
-getFileAge :: FilePath -> IO Int
+getFileAge :: FilePath -> IO Double
 getFileAge file = do
   t0 <- getModificationTime file
 #if MIN_VERSION_directory(1,2,0)
   t1 <- getCurrentTime
-  let days = truncate $ (t1 `diffUTCTime` t0) / posixDayLength
+  return $ realToFrac (t1 `diffUTCTime` t0) / realToFrac posixDayLength
 #else
   t1 <- getClockTime
-  let days = (tdDay . normalizeTimeDiff) (t1 `diffClockTimes` t0)
+  let dt = normalizeTimeDiff (t1 `diffClockTimes` t0)
+  return $ fromIntegral ((24 * tdDay dt) + tdHour dt) / 24.0
 #endif
-  return days
 
 getCurTime :: IO EpochTime
 getCurTime =  do

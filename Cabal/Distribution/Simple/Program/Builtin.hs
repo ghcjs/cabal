@@ -22,11 +22,8 @@ module Distribution.Simple.Program.Builtin (
     ghcjsPkgProgram,
     lhcProgram,
     lhcPkgProgram,
-    nhcProgram,
     hmakeProgram,
     jhcProgram,
-    hugsProgram,
-    ffihugsProgram,
     haskellSuiteProgram,
     haskellSuitePkgProgram,
     uhcProgram,
@@ -48,12 +45,25 @@ module Distribution.Simple.Program.Builtin (
     hpcProgram,
   ) where
 
-import Distribution.Simple.Program.Types
-         ( Program(..), simpleProgram )
 import Distribution.Simple.Program.Find
          ( findProgramOnSearchPath )
+import Distribution.Simple.Program.Run
+         ( getProgramInvocationOutput, programInvocation )
+import Distribution.Simple.Program.Types
+         ( Program(..), ConfiguredProgram(..), simpleProgram )
 import Distribution.Simple.Utils
          ( findProgramVersion )
+import Distribution.Compat.Exception
+         ( catchIO )
+import Distribution.Version
+         ( Version(..), withinRange, earlierVersion, laterVersion
+         , intersectVersionRanges )
+import Data.Char
+         ( isDigit )
+
+import Data.List
+         ( isInfixOf )
+import qualified Data.Map as Map
 
 -- ------------------------------------------------------------
 -- * Known programs
@@ -69,11 +79,8 @@ builtinPrograms =
     , ghcPkgProgram
     , ghcjsProgram
     , ghcjsPkgProgram
-    , hugsProgram
-    , ffihugsProgram
     , haskellSuiteProgram
     , haskellSuitePkgProgram
-    , nhcProgram
     , hmakeProgram
     , jhcProgram
     , lhcProgram
@@ -101,7 +108,23 @@ builtinPrograms =
 
 ghcProgram :: Program
 ghcProgram = (simpleProgram "ghc") {
-    programFindVersion = findProgramVersion "--numeric-version" id
+    programFindVersion = findProgramVersion "--numeric-version" id,
+
+    -- Workaround for https://ghc.haskell.org/trac/ghc/ticket/8825
+    -- (spurious warning on non-english locales)
+    programPostConf    = \_verbosity ghcProg ->
+    do let ghcProg' = ghcProg {
+             programOverrideEnv = ("LANGUAGE", Just "en")
+                                  : programOverrideEnv ghcProg
+             }
+           -- Only the 7.8 branch seems to be affected. Fixed in 7.8.4.
+           affectedVersionRange = intersectVersionRanges
+                                  (laterVersion   $ Version [7,8,0] [])
+                                  (earlierVersion $ Version [7,8,4] [])
+       return $ maybe ghcProg
+         (\v -> if withinRange v affectedVersionRange
+                then ghcProg' else ghcProg)
+         (programVersion ghcProg)
   }
 
 ghcPkgProgram :: Program
@@ -144,16 +167,6 @@ lhcPkgProgram = (simpleProgram "lhc-pkg") {
         _               -> ""
   }
 
-nhcProgram :: Program
-nhcProgram = (simpleProgram "nhc98") {
-    programFindVersion = findProgramVersion "--version" $ \str ->
-      -- Invoking "nhc98 --version" gives a string like
-      -- "/usr/local/bin/nhc98: v1.20 (2007-11-22)"
-      case words str of
-        (_:('v':ver):_) -> ver
-        _               -> ""
-  }
-
 hmakeProgram :: Program
 hmakeProgram = (simpleProgram "hmake") {
     programFindVersion = findProgramVersion "--version" $ \str ->
@@ -188,13 +201,6 @@ hpcProgram = (simpleProgram "hpc")
                 (_ : _ : _ : ver : _) -> ver
                 _ -> ""
     }
-
--- AArgh! Finding the version of hugs or ffihugs is almost impossible.
-hugsProgram :: Program
-hugsProgram = simpleProgram "hugs"
-
-ffihugsProgram :: Program
-ffihugsProgram = simpleProgram "ffihugs"
 
 -- This represents a haskell-suite compiler. Of course, the compiler
 -- itself probably is not called "haskell-suite", so this is not a real
@@ -245,7 +251,7 @@ alexProgram = (simpleProgram "alex") {
       -- Invoking "alex --version" gives a string like
       -- "Alex version 2.1.0, (c) 2003 Chris Dornan and Simon Marlow"
       case words str of
-        (_:_:ver:_) -> takeWhile (`elem` ('.':['0'..'9'])) ver
+        (_:_:ver:_) -> takeWhile (\x -> isDigit x || x == '.') ver
         _           -> ""
   }
 
@@ -311,7 +317,19 @@ ldProgram :: Program
 ldProgram = simpleProgram "ld"
 
 tarProgram :: Program
-tarProgram = simpleProgram "tar"
+tarProgram = (simpleProgram "tar") {
+  -- See #1901. Some versions of 'tar' (OpenBSD, NetBSD, ...) don't support the
+  -- '--format' option.
+  programPostConf = \verbosity tarProg -> do
+     tarHelpOutput <- getProgramInvocationOutput
+                      verbosity (programInvocation tarProg ["--help"])
+                      -- Some versions of tar don't support '--help'.
+                      `catchIO` (\_ -> return "")
+     let k = "Supports --format"
+         v = if ("--format" `isInfixOf` tarHelpOutput) then "YES" else "NO"
+         m = Map.insert k v (programProperties tarProg)
+     return $ tarProg { programProperties = m }
+  }
 
 cppProgram :: Program
 cppProgram = simpleProgram "cpp"

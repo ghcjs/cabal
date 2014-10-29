@@ -52,14 +52,19 @@ module Distribution.Simple.GHC.Internal (
         mkGHCiLibName,
         filterGhciFlags,
         ghcLookupProperty,
-        getHaskellObjects
+        getHaskellObjects,
+        mkGhcOptPackages
  ) where
 
 import Distribution.Simple.GHC.Props ( ImplProps (..) )
+import Distribution.Package
+         ( PackageName(..), InstalledPackageId, PackageId )
 import Distribution.PackageDescription as PD
          ( PackageDescription(..), BuildInfo(..), Executable(..)
-         , Library(..), libModules, exeModules, hcOptions
+         , Library(..), libModules, exeModules
+         , hcOptions, hcProfOptions, hcSharedOptions
          , usedExtensions, allExtensions )
+import Distribution.PackageDescription ( ModuleRenaming, lookupRenaming )
 import Distribution.Compat.Exception ( catchExit, catchIO )
 import Distribution.Simple.Compiler
          ( CompilerFlavor(..), CompilerId(..), Compiler(..), compilerVersion
@@ -84,6 +89,7 @@ import Distribution.Simple.Utils
 import Distribution.Simple.BuildPaths
 import Distribution.System ( buildOS, OS(..), Platform, platformFromTriple )
 import Distribution.Text ( display, simpleParse )
+import Distribution.Utils.NubList ( toNubListR )
 import Distribution.Verbosity
 import Distribution.Version ( Version(..) )
 import Language.Haskell.Extension
@@ -360,13 +366,14 @@ componentCcGhcOptions verbosity props lbi bi clbi pref filename =
     mempty {
       ghcOptVerbosity      = toFlag verbosity,
       ghcOptMode           = toFlag GhcModeCompile,
-      ghcOptInputFiles     = [filename],
+      ghcOptInputFiles     = toNubListR [filename],
 
-      ghcOptCppIncludePath = [autogenModulesDir lbi, odir]
-                                   ++ PD.includeDirs bi,
+      ghcOptCppIncludePath = toNubListR $ [autogenModulesDir lbi, odir]
+                                          ++ PD.includeDirs bi,
       ghcOptPackageDBs     = withPackageDB lbi,
-      ghcOptPackages       = componentPackageDeps clbi,
-      ghcOptCcOptions      = (case withOptimization lbi of
+      ghcOptPackages       = toNubListR $ mkGhcOptPackages clbi,
+      ghcOptCcOptions      = toNubListR $
+                             (case withOptimization lbi of
                                   NoOptimisation -> []
                                   _              -> ["-O2"]) ++
                                   PD.ccOptions bi,
@@ -386,26 +393,27 @@ componentGhcOptions verbosity lbi bi clbi odir =
       ghcOptHideAllPackages = toFlag True,
       ghcOptCabal           = toFlag True,
       ghcOptPackageDBs      = withPackageDB lbi,
-      ghcOptPackages        = componentPackageDeps clbi,
+      ghcOptPackages        = toNubListR $ mkGhcOptPackages clbi,
       ghcOptSplitObjs       = toFlag (splitObjs lbi),
       ghcOptSourcePathClear = toFlag True,
-      ghcOptSourcePath      = [odir] ++ nub (hsSourceDirs bi)
-                                    ++ [autogenModulesDir lbi],
-      ghcOptCppIncludePath  = [autogenModulesDir lbi, odir]
-                                    ++ PD.includeDirs bi,
-      ghcOptCppOptions      = cppOptions bi,
-      ghcOptCppIncludes     = [autogenModulesDir lbi </> cppHeaderName],
-      ghcOptFfiIncludes     = PD.includes bi,
+      ghcOptSourcePath      = toNubListR $ [odir] ++ (hsSourceDirs bi)
+                                           ++ [autogenModulesDir lbi],
+      ghcOptCppIncludePath  = toNubListR $ [autogenModulesDir lbi, odir]
+                                           ++ PD.includeDirs bi,
+      ghcOptCppOptions      = toNubListR $ cppOptions bi,
+      ghcOptCppIncludes     = toNubListR $
+                              [autogenModulesDir lbi </> cppHeaderName],
+      ghcOptFfiIncludes     = toNubListR $ PD.includes bi,
       ghcOptObjDir          = toFlag odir,
       ghcOptHiDir           = toFlag odir,
       ghcOptStubDir         = toFlag odir,
       ghcOptOutputDir       = toFlag odir,
       ghcOptOptimisation    = toGhcOptimisation (withOptimization lbi),
-      ghcOptExtra           = hcOptions GHC bi,
+      ghcOptExtra           = toNubListR $ hcOptions GHC bi,
       ghcOptLanguage        = toFlag (fromMaybe Haskell98 (defaultLanguage bi)),
       -- Unsupported extensions have already been checked by configure
-      ghcOptExtensions      = usedExtensions bi,
-      ghcOptExtensionMap    = compilerExtensions (compiler lbi)
+      ghcOptExtensions      = toNubListR $ usedExtensions bi,
+      ghcOptExtensionMap    = M.fromList . compilerExtensions $ (compiler lbi)
     }
   where
     toGhcOptimisation NoOptimisation      = mempty --TODO perhaps override?
@@ -455,3 +463,8 @@ getHaskellObjects props lib lbi pref wanted_obj_ext allow_split_objs
         return [ pref </> ModuleName.toFilePath x <.> wanted_obj_ext
                | x <- libModules lib ]
 
+mkGhcOptPackages :: ComponentLocalBuildInfo
+                 -> [(InstalledPackageId, PackageId, ModuleRenaming)]
+mkGhcOptPackages clbi =
+  map (\(i,p) -> (i,p,lookupRenaming p (componentPackageRenaming clbi)))
+      (componentPackageDeps clbi)

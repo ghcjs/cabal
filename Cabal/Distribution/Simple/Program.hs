@@ -79,6 +79,7 @@ module Distribution.Simple.Program (
     , userSpecifyArgss
     , userSpecifiedArgs
     , lookupProgram
+    , lookupProgramVersion
     , updateProgram
     , configureProgram
     , configureAllKnownPrograms
@@ -95,11 +96,8 @@ module Distribution.Simple.Program (
     , ghcjsPkgProgram
     , lhcProgram
     , lhcPkgProgram
-    , nhcProgram
     , hmakeProgram
     , jhcProgram
-    , hugsProgram
-    , ffihugsProgram
     , uhcProgram
     , gccProgram
     , arProgram

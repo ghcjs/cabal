@@ -35,6 +35,7 @@ module Distribution.Client.Setup
     , win32SelfUpgradeCommand, Win32SelfUpgradeFlags(..)
     , sandboxCommand, defaultSandboxLocation, SandboxFlags(..)
     , execCommand, ExecFlags(..)
+    , userConfigCommand, UserConfigFlags(..)
 
     , parsePackageArgs
     --TODO: stop exporting these:
@@ -52,6 +53,8 @@ import qualified Distribution.Client.Init.Types as IT
          ( InitFlags(..), PackageType(..) )
 import Distribution.Client.Targets
          ( UserConstraint, readUserConstraint )
+import Distribution.Utils.NubList
+         ( NubList, toNubList, fromNubList)
 
 import Distribution.Simple.Compiler (PackageDB)
 import Distribution.Simple.Program
@@ -111,9 +114,9 @@ data GlobalFlags = GlobalFlags {
     globalNumericVersion    :: Flag Bool,
     globalConfigFile        :: Flag FilePath,
     globalSandboxConfigFile :: Flag FilePath,
-    globalRemoteRepos       :: [RemoteRepo],     -- ^ Available Hackage servers.
+    globalRemoteRepos       :: NubList RemoteRepo,     -- ^ Available Hackage servers.
     globalCacheDir          :: Flag FilePath,
-    globalLocalRepos        :: [FilePath],
+    globalLocalRepos        :: NubList FilePath,
     globalLogsDir           :: Flag FilePath,
     globalWorldFile         :: Flag FilePath,
     globalRequireSandbox    :: Flag Bool,
@@ -187,7 +190,7 @@ globalCommand = CommandUI {
       ,option [] ["remote-repo"]
          "The name and url for a remote repository"
          globalRemoteRepos (\v flags -> flags { globalRemoteRepos = v })
-         (reqArg' "NAME:URL" (maybeToList . readRepo) (map showRepo))
+         (reqArg' "NAME:URL" (toNubList . maybeToList . readRepo) (map showRepo . fromNubList))
 
       ,option [] ["remote-repo-cache"]
          "The location where downloads from all remote repos are cached"
@@ -197,7 +200,7 @@ globalCommand = CommandUI {
       ,option [] ["local-repo"]
          "The location of a local repository"
          globalLocalRepos (\v flags -> flags { globalLocalRepos = v })
-         (reqArg' "DIR" (\x -> [x]) id)
+         (reqArg' "DIR" (\x -> toNubList [x]) fromNubList)
 
       ,option [] ["logs-dir"]
          "The location to put log files"
@@ -230,7 +233,7 @@ instance Monoid GlobalFlags where
     globalNumericVersion    = combine globalNumericVersion,
     globalConfigFile        = combine globalConfigFile,
     globalSandboxConfigFile = combine globalConfigFile,
-    globalRemoteRepos       = replace globalRemoteRepos,
+    globalRemoteRepos       = combine globalRemoteRepos,
     globalCacheDir          = combine globalCacheDir,
     globalLocalRepos        = combine globalLocalRepos,
     globalLogsDir           = combine globalLogsDir,
@@ -239,20 +242,18 @@ instance Monoid GlobalFlags where
     globalIgnoreSandbox     = combine globalIgnoreSandbox
   }
     where combine field = field a `mappend` field b
-          replace field | null (field b) = field a
-                        | otherwise      = field b
 
 globalRepos :: GlobalFlags -> [Repo]
 globalRepos globalFlags = remoteRepos ++ localRepos
   where
     remoteRepos =
       [ Repo (Left remote) cacheDir
-      | remote <- globalRemoteRepos globalFlags
+      | remote <- fromNubList $ globalRemoteRepos globalFlags
       , let cacheDir = fromFlag (globalCacheDir globalFlags)
                    </> remoteRepoName remote ]
     localRepos =
       [ Repo (Right LocalRepo) local
-      | local <- globalLocalRepos globalFlags ]
+      | local <- fromNubList $ globalLocalRepos globalFlags ]
 
 -- ------------------------------------------------------------
 -- * Config flags
@@ -286,7 +287,7 @@ filterConfigureFlags flags cabalLibVersion
     flags_1_19_0 = flags_1_19_1 { configDependencies = []
                                 , configConstraints  = configConstraints flags }
     -- Cabal < 1.18.0 doesn't know about --extra-prog-path and --sysconfdir.
-    flags_1_18_0 = flags_1_19_0 { configProgramPathExtra = []
+    flags_1_18_0 = flags_1_19_0 { configProgramPathExtra = toNubList []
                                 , configInstallDirs = configInstallDirs_1_18_0}
     configInstallDirs_1_18_0 = (configInstallDirs flags) { sysconfdir = NoFlag }
     -- Cabal < 1.14.0 doesn't know about '--disable-benchmarks'.
@@ -973,7 +974,7 @@ data InstallFlags = InstallFlags {
     installOnly             :: Flag Bool,
     installOnlyDeps         :: Flag Bool,
     installRootCmd          :: Flag String,
-    installSummaryFile      :: [PathTemplate],
+    installSummaryFile      :: NubList PathTemplate,
     installLogFile          :: Flag PathTemplate,
     installBuildReports     :: Flag ReportLevel,
     installReportPlanningFailure :: Flag Bool,
@@ -1010,7 +1011,8 @@ defaultInstallFlags = InstallFlags {
     installRunTests        = mempty
   }
   where
-    docIndexFile = toPathTemplate ("$datadir" </> "doc" </> "index.html")
+    docIndexFile = toPathTemplate ("$datadir" </> "doc"
+                                   </> "$arch-$os-$compiler" </> "index.html")
 
 allowNewerParser :: ReadE AllowNewer
 allowNewerParser = ReadE $ \s ->
@@ -1166,7 +1168,7 @@ installOptions showOrParseArgs =
       , option [] ["build-summary"]
           "Save build summaries to file (name template can use $pkgid, $compiler, $os, $arch)"
           installSummaryFile (\v flags -> flags { installSummaryFile = v })
-          (reqArg' "TEMPLATE" (\x -> [toPathTemplate x]) (map fromPathTemplate))
+          (reqArg' "TEMPLATE" (\x -> toNubList [toPathTemplate x]) (map fromPathTemplate . fromNubList))
 
       , option [] ["build-log"]
           "Log all builds to file (name template can use $pkgid, $compiler, $os, $arch)"
@@ -1722,6 +1724,43 @@ instance Monoid ExecFlags where
     execVerbosity = combine execVerbosity
     }
     where combine field = field a `mappend` field b
+
+-- ------------------------------------------------------------
+-- * UserConfig flags
+-- ------------------------------------------------------------
+
+data UserConfigFlags = UserConfigFlags {
+  userConfigVerbosity :: Flag Verbosity
+}
+
+instance Monoid UserConfigFlags where
+  mempty = UserConfigFlags {
+    userConfigVerbosity = toFlag normal
+    }
+  mappend a b = UserConfigFlags {
+    userConfigVerbosity = combine userConfigVerbosity
+    }
+    where combine field = field a `mappend` field b
+
+userConfigCommand :: CommandUI UserConfigFlags
+userConfigCommand = CommandUI {
+  commandName         = "user-config",
+  commandSynopsis     = "Manipulate the user's ~/.cabal/config file.",
+  commandDescription  = Just $ \_ ->
+       "Allows pseudo-diff-ing and updating of the user's ~/.cabal/config "
+    ++ "file. The\ndiff is against what cabal would generate if the user "
+    ++ "config file did not\nexist. The update command overlays the user's "
+    ++ "existing settings over the\ncurrent version of the default settings "
+    ++ "and writes it back to ~/.cabal/config.\n",
+
+  commandUsage        = \ pname ->
+      "Usage: " ++ pname ++ " user-config diff\n"
+   ++ "       " ++ pname ++ " user-config update\n",
+  commandDefaultFlags = mempty,
+  commandOptions      = \ _ -> [
+   optionVerbosity userConfigVerbosity (\v flags -> flags { userConfigVerbosity = v })
+   ]
+  }
 
 -- ------------------------------------------------------------
 -- * GetOpt Utils

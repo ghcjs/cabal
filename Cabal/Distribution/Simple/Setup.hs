@@ -1,3 +1,5 @@
+{-# LANGUAGE DeriveGeneric #-}
+
 -----------------------------------------------------------------------------
 -- |
 -- Module      :  Distribution.Simple.Setup
@@ -93,11 +95,14 @@ import Distribution.Simple.InstallDirs
          ( InstallDirs(..), CopyDest(..),
            PathTemplate, toPathTemplate, fromPathTemplate )
 import Distribution.Verbosity
+import Distribution.Utils.NubList
 
 import Control.Monad (liftM)
+import Data.Binary (Binary)
 import Data.List   ( sort )
 import Data.Char   ( isSpace, isAlpha )
 import Data.Monoid ( Monoid(..) )
+import GHC.Generics (Generic)
 
 -- FIXME Not sure where this should live
 defaultDistPref :: FilePath
@@ -124,7 +129,9 @@ defaultDistPref = "dist"
 -- Its monoid instance gives us the behaviour where it starts out as
 -- 'NoFlag' and later flags override earlier ones.
 --
-data Flag a = Flag a | NoFlag deriving (Show, Read, Eq)
+data Flag a = Flag a | NoFlag deriving (Eq, Generic, Show, Read)
+
+instance Binary a => Binary (Flag a)
 
 instance Functor Flag where
   fmap f (Flag x) = Flag (f x)
@@ -252,10 +259,10 @@ data ConfigFlags = ConfigFlags {
 
     configProgramPaths  :: [(String, FilePath)], -- ^user specified programs paths
     configProgramArgs   :: [(String, [String])], -- ^user specified programs args
-    configProgramPathExtra :: [FilePath],        -- ^Extend the $PATH
+    configProgramPathExtra :: NubList FilePath,  -- ^Extend the $PATH
     configHcFlavor      :: Flag CompilerFlavor, -- ^The \"flavor\" of the
                                                 -- compiler, such as GHC or
-                                                -- Hugs.
+                                                -- JHC.
     configHcPath        :: Flag FilePath, -- ^given compiler location
     configHcPkg         :: Flag FilePath, -- ^given hc-pkg location
     configVanillaLib    :: Flag Bool,     -- ^Enable vanilla library
@@ -290,13 +297,17 @@ data ConfigFlags = ConfigFlags {
     configConfigurationsFlags :: FlagAssignment,
     configTests               :: Flag Bool, -- ^Enable test suite compilation
     configBenchmarks          :: Flag Bool, -- ^Enable benchmark compilation
-    configLibCoverage         :: Flag Bool,
-      -- ^Enable test suite program coverage.
-    configExactConfiguration  :: Flag Bool
+    configCoverage :: Flag Bool, -- ^Enable program coverage
+    configLibCoverage :: Flag Bool, -- ^OBSOLETE. Just used to signal error.
+    configExactConfiguration  :: Flag Bool,
       -- ^All direct dependencies and flags are provided on the command line by
       -- the user via the '--dependency' and '--flags' options.
+    configFlagError :: Flag String
+      -- ^Halt and show an error message indicating an error in flag assignment
   }
-  deriving (Read,Show)
+  deriving (Generic, Read, Show)
+
+instance Binary ConfigFlags
 
 configAbsolutePaths :: ConfigFlags -> IO ConfigFlags
 configAbsolutePaths f =
@@ -323,15 +334,17 @@ defaultConfigFlags progConf = emptyConfigFlags {
     -- See #1589.
     configGHCiLib      = Flag True,
 #else
-    configGHCiLib      = Flag False,
+    configGHCiLib      = NoFlag,
 #endif
     configSplitObjs    = Flag False, -- takes longer, so turn off by default
     configStripExes    = Flag True,
     configStripLibs    = Flag True,
     configTests        = Flag False,
     configBenchmarks   = Flag False,
-    configLibCoverage  = Flag False,
-    configExactConfiguration = Flag False
+    configCoverage     = Flag False,
+    configLibCoverage  = NoFlag,
+    configExactConfiguration = Flag False,
+    configFlagError    = NoFlag
   }
 
 configureCommand :: ProgramConfiguration -> CommandUI ConfigFlags
@@ -363,12 +376,9 @@ configureOptions showOrParseArgs =
          configHcFlavor (\v flags -> flags { configHcFlavor = v })
          (choiceOpt [ (Flag GHC,   ("g", ["ghc"]), "compile with GHC")
                     , (Flag GHCJS, ([] , ["ghcjs"]), "compile with GHCJS")
-                    , (Flag NHC,   ([] , ["nhc98"]), "compile with NHC")
                     , (Flag JHC,   ([] , ["jhc"]), "compile with JHC")
                     , (Flag LHC,   ([] , ["lhc"]), "compile with LHC")
-                    , (Flag Hugs,  ([] , ["hugs"]), "compile with Hugs")
                     , (Flag UHC,   ([] , ["uhc"]), "compile with UHC")
-
                     -- "haskell-suite" compiler id string will be replaced
                     -- by a more specific one during the configure stage
                     , (Flag (HaskellSuite "haskell-suite"), ([] , ["haskell-suite"]),
@@ -385,13 +395,7 @@ configureOptions showOrParseArgs =
          (reqArgFlag "PATH")
       ]
    ++ map liftInstallDirs installDirsOptions
-   ++ [option "b" ["scratchdir"]
-         "directory to receive the built package (hugs-only)"
-         configScratchDir (\v flags -> flags { configScratchDir = v })
-         (reqArgFlag "DIR")
-      --TODO: eliminate scratchdir flag
-
-      ,option "" ["program-prefix"]
+   ++ [option "" ["program-prefix"]
           "prefix to be applied to installed executables"
           configProgPrefix
           (\v flags -> flags { configProgPrefix = v })
@@ -495,7 +499,7 @@ configureOptions showOrParseArgs =
       ,option "" ["extra-prog-path"]
          "A list of directories to search for required programs (in addition to the normal search locations)"
          configProgramPathExtra (\v flags -> flags {configProgramPathExtra = v})
-         (reqArg' "PATH" (\x -> [x]) id)
+         (reqArg' "PATH" (\x -> toNubList [x]) fromNubList)
 
       ,option "" ["constraint"]
          "A list of additional constraints on the dependencies."
@@ -517,8 +521,13 @@ configureOptions showOrParseArgs =
          (boolOpt [] [])
 
       ,option "" ["library-coverage"]
-         "build library and test suites with Haskell Program Coverage enabled. (GHC only)"
+         "OBSOLETE. Please use --enable-coverage instead."
          configLibCoverage (\v flags -> flags { configLibCoverage = v })
+         (boolOpt [] [])
+
+      ,option "" ["coverage"]
+         "build package with Haskell Program Coverage enabled. (GHC only)"
+         configCoverage (\v flags -> flags { configCoverage = v })
          (boolOpt [] [])
 
       ,option "" ["exact-configuration"]
@@ -670,9 +679,11 @@ instance Monoid ConfigFlags where
     configExtraIncludeDirs    = mempty,
     configConfigurationsFlags = mempty,
     configTests               = mempty,
-    configLibCoverage         = mempty,
+    configCoverage         = mempty,
+    configLibCoverage   = mempty,
     configExactConfiguration  = mempty,
-    configBenchmarks          = mempty
+    configBenchmarks          = mempty,
+    configFlagError     = mempty
   }
   mappend a b =  ConfigFlags {
     configPrograms      = configPrograms b,
@@ -707,9 +718,11 @@ instance Monoid ConfigFlags where
     configExtraIncludeDirs    = combine configExtraIncludeDirs,
     configConfigurationsFlags = combine configConfigurationsFlags,
     configTests               = combine configTests,
+    configCoverage         = combine configCoverage,
     configLibCoverage         = combine configLibCoverage,
     configExactConfiguration  = combine configExactConfiguration,
-    configBenchmarks          = combine configBenchmarks
+    configBenchmarks          = combine configBenchmarks,
+    configFlagError     = combine configFlagError
   }
     where combine field = field a `mappend` field b
 

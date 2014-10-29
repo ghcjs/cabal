@@ -50,7 +50,8 @@ import Distribution.ReadE
 import Distribution.Text
          ( Text(..) )
 import Distribution.Simple.Utils
-         ( comparing, intercalate, lowercase, normaliseLineEndings )
+         ( comparing, dropWhileEndLE, intercalate, lowercase
+         , normaliseLineEndings )
 import Language.Haskell.Extension
          ( Language, Extension )
 
@@ -198,7 +199,7 @@ commaListFieldWithSep separator name showF readF get set =
    where
      set' xs b = set (get b ++ xs) b
      showF'    = separator . punctuate comma . map showF
- 
+
 commaListField :: String -> (a -> Doc) -> ReadP [a] a
                  -> (b -> [a]) -> ([a] -> b -> b) -> FieldDescr b
 commaListField = commaListFieldWithSep fsep
@@ -477,7 +478,7 @@ tokeniseLineFlat (n0, i, t, l)
 
 trimLeading, trimTrailing :: String -> String
 trimLeading  = dropWhile isSpace
-trimTrailing = reverse . dropWhile isSpace . reverse
+trimTrailing = dropWhileEndLE isSpace
 
 
 type SyntaxTree = Tree (LineNo, HasTabs, String)

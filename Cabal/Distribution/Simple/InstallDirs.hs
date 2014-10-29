@@ -1,4 +1,6 @@
 {-# LANGUAGE CPP, ForeignFunctionInterface #-}
+{-# LANGUAGE DeriveGeneric #-}
+
 -----------------------------------------------------------------------------
 -- |
 -- Module      :  Distribution.Simple.InstallDirs
@@ -41,9 +43,11 @@ module Distribution.Simple.InstallDirs (
   ) where
 
 
+import Data.Binary (Binary)
 import Data.List (isPrefixOf)
 import Data.Maybe (fromMaybe)
 import Data.Monoid (Monoid(..))
+import GHC.Generics (Generic)
 import System.Directory (getAppUserDataDirectory)
 import System.FilePath ((</>), isPathSeparator, pathSeparator)
 import System.FilePath (dropDrive)
@@ -80,7 +84,6 @@ data InstallDirs dir = InstallDirs {
         libsubdir    :: dir,
         dynlibdir    :: dir,
         libexecdir   :: dir,
-        progdir      :: dir,
         includedir   :: dir,
         datadir      :: dir,
         datasubdir   :: dir,
@@ -89,7 +92,9 @@ data InstallDirs dir = InstallDirs {
         htmldir      :: dir,
         haddockdir   :: dir,
         sysconfdir   :: dir
-    } deriving (Read, Show)
+    } deriving (Generic, Read, Show)
+
+instance Binary dir => Binary (InstallDirs dir)
 
 instance Functor InstallDirs where
   fmap f dirs = InstallDirs {
@@ -99,7 +104,6 @@ instance Functor InstallDirs where
     libsubdir    = f (libsubdir dirs),
     dynlibdir    = f (dynlibdir dirs),
     libexecdir   = f (libexecdir dirs),
-    progdir      = f (progdir dirs),
     includedir   = f (includedir dirs),
     datadir      = f (datadir dirs),
     datasubdir   = f (datasubdir dirs),
@@ -118,7 +122,6 @@ instance Monoid dir => Monoid (InstallDirs dir) where
       libsubdir    = mempty,
       dynlibdir    = mempty,
       libexecdir   = mempty,
-      progdir      = mempty,
       includedir   = mempty,
       datadir      = mempty,
       datasubdir   = mempty,
@@ -141,7 +144,6 @@ combineInstallDirs combine a b = InstallDirs {
     libsubdir    = libsubdir a  `combine` libsubdir b,
     dynlibdir    = dynlibdir a  `combine` dynlibdir b,
     libexecdir   = libexecdir a `combine` libexecdir b,
-    progdir      = progdir a    `combine` progdir b,
     includedir   = includedir a `combine` includedir b,
     datadir      = datadir a    `combine` datadir b,
     datasubdir   = datasubdir a `combine` datasubdir b,
@@ -207,7 +209,6 @@ defaultInstallDirs comp userInstall _hasLibs = do
       bindir       = "$prefix" </> "bin",
       libdir       = installLibDir,
       libsubdir    = case comp of
-           Hugs   -> "hugs" </> "packages" </> "$pkg"
            JHC    -> "$compiler"
            LHC    -> "$compiler"
            UHC    -> "$pkgid"
@@ -216,7 +217,6 @@ defaultInstallDirs comp userInstall _hasLibs = do
       libexecdir   = case buildOS of
         Windows   -> "$prefix" </> "$pkgkey"
         _other    -> "$prefix" </> "libexec",
-      progdir      = "$libdir" </> "hugs" </> "programs",
       includedir   = "$libdir" </> "$libsubdir" </> "include",
       datadir      = case buildOS of
         Windows   -> "$prefix"
@@ -256,7 +256,6 @@ substituteInstallDirTemplates env dirs = dirs'
       libsubdir  = subst libsubdir  [],
       dynlibdir  = subst dynlibdir  [prefixVar, bindirVar, libdirVar],
       libexecdir = subst libexecdir prefixBinLibVars,
-      progdir    = subst progdir    prefixBinLibVars,
       includedir = subst includedir prefixBinLibVars,
       datadir    = subst datadir    prefixBinLibVars,
       datasubdir = subst datasubdir [],
@@ -346,12 +345,16 @@ prefixRelativeInstallDirs pkgId pkg_key compilerId platform dirs =
 -- | An abstract path, possibly containing variables that need to be
 -- substituted for to get a real 'FilePath'.
 --
-newtype PathTemplate = PathTemplate [PathComponent]
+newtype PathTemplate = PathTemplate [PathComponent] deriving (Eq, Generic, Ord)
+
+instance Binary PathTemplate
 
 data PathComponent =
        Ordinary FilePath
      | Variable PathTemplateVariable
-     deriving Eq
+     deriving (Eq, Ord, Generic)
+
+instance Binary PathComponent
 
 data PathTemplateVariable =
        PrefixVar     -- ^ The @$prefix@ path variable
@@ -374,7 +377,9 @@ data PathTemplateVariable =
      | TestSuiteResultVar -- ^ The result of the test suite being run, eg
                           -- @pass@, @fail@, or @error@.
      | BenchmarkNameVar   -- ^ The name of the benchmark being run
-  deriving Eq
+  deriving (Eq, Ord, Generic)
+
+instance Binary PathTemplateVariable
 
 type PathTemplateEnv = [(PathTemplateVariable, PathTemplate)]
 

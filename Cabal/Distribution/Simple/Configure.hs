@@ -44,11 +44,12 @@ module Distribution.Simple.Configure (configure,
 
 import Distribution.Compiler
     ( CompilerId(..) )
+import Distribution.Utils.NubList
 import Distribution.Simple.Compiler
     ( CompilerFlavor(..), Compiler(..), compilerFlavor, compilerVersion
     , showCompilerId, unsupportedLanguages, unsupportedExtensions
     , PackageDB(..), PackageDBStack, reexportedModulesSupported
-    , packageKeySupported )
+    , packageKeySupported, renamingPackageFlagsSupported )
 import Distribution.Simple.PreProcess ( platformDefines )
 import Distribution.Package
     ( PackageName(PackageName), PackageIdentifier(..), PackageId
@@ -59,18 +60,22 @@ import Distribution.Package
 import Distribution.InstalledPackageInfo as Installed
     ( InstalledPackageInfo, InstalledPackageInfo_(..)
     , emptyInstalledPackageInfo )
+import qualified Distribution.InstalledPackageInfo as Installed
+    ( ModuleReexport(..) )
 import qualified Distribution.Simple.PackageIndex as PackageIndex
-import Distribution.Simple.PackageIndex (PackageIndex)
+import Distribution.Simple.PackageIndex (InstalledPackageIndex)
 import Distribution.PackageDescription as PD
     ( PackageDescription(..), specVersion, GenericPackageDescription(..)
     , Library(..), hasLibs, Executable(..), BuildInfo(..), allExtensions
     , HookedBuildInfo, updatePackageDescription, allBuildInfo
-    , Flag(flagName), FlagName(..), TestSuite(..), Benchmark(..) )
+    , Flag(flagName), FlagName(..), TestSuite(..), Benchmark(..)
+    , ModuleReexport(..) , defaultRenaming )
+import Distribution.ModuleName
+    ( ModuleName )
 import Distribution.PackageDescription.Configuration
     ( finalizePackageDescription, mapTreeData )
 import Distribution.PackageDescription.Check
     ( PackageCheck(..), checkPackage, checkPackageFiles )
-import Distribution.Simple.Hpc ( enableCoverage )
 import Distribution.Simple.Program
     ( Program(..), ProgramLocation(..), ConfiguredProgram(..)
     , ProgramConfiguration, defaultProgramConfiguration
@@ -80,7 +85,8 @@ import Distribution.Simple.Program
     , lookupProgram, requireProgram, requireProgramVersion
     , pkgConfigProgram, gccProgram, rawSystemProgramStdoutConf )
 import Distribution.Simple.Setup
-    ( ConfigFlags(..), CopyDest(..), fromFlag, fromFlagOrDefault, flagToMaybe )
+    ( ConfigFlags(..), CopyDest(..), Flag(..), fromFlag, fromFlagOrDefault
+    , flagToMaybe )
 import Distribution.Simple.InstallDirs
     ( InstallDirs(..), defaultInstallDirs, combineInstallDirs )
 import Distribution.Simple.LocalBuildInfo
@@ -95,7 +101,7 @@ import Distribution.Simple.Utils
     ( die, warn, info, setupMessage
     , createDirectoryIfMissingVerbose, moreRecentFile
     , intercalate, cabalVersion
-    , withFileContents, writeFileAtomic
+    , writeFileAtomic
     , withTempFile )
 import Distribution.System
     ( OS(..), buildOS, Platform, buildPlatform )
@@ -108,23 +114,26 @@ import qualified Distribution.Simple.GHC   as GHC
 import qualified Distribution.Simple.GHCJS as GHCJS
 import qualified Distribution.Simple.JHC   as JHC
 import qualified Distribution.Simple.LHC   as LHC
-import qualified Distribution.Simple.NHC   as NHC
-import qualified Distribution.Simple.Hugs  as Hugs
 import qualified Distribution.Simple.UHC   as UHC
 import qualified Distribution.Simple.HaskellSuite as HaskellSuite
 
 -- Prefer the more generic Data.Traversable.mapM to Prelude.mapM
 import Prelude hiding ( mapM )
 import Control.Monad
-    ( when, unless, foldM, filterM )
+    ( liftM, when, unless, foldM, filterM )
+import Data.Binary ( Binary, decodeOrFail, encode )
+import qualified Data.ByteString.Lazy as BS
 import Data.List
     ( (\\), nub, partition, isPrefixOf, inits )
 import Data.Maybe
     ( isNothing, catMaybes, fromMaybe )
+import Data.Either
+    ( partitionEithers )
 import Data.Monoid
     ( Monoid(..) )
 import qualified Data.Map as Map
 import Data.Map (Map)
+import qualified Data.Set as Set
 import Data.Traversable
     ( mapM )
 import System.Directory
@@ -142,48 +151,74 @@ import Text.PrettyPrint
     , quotes, punctuate, nest, sep, hsep )
 import Distribution.Compat.Exception ( catchExit, catchIO )
 
-import qualified Data.ByteString.Lazy.Char8 as BS.Char8
-
 data ConfigStateFileErrorType = ConfigStateFileCantParse
                               | ConfigStateFileMissing
                               | ConfigStateFileBadVersion
                               deriving Eq
 type ConfigStateFileError = (String, ConfigStateFileErrorType)
 
-tryGetConfigStateFile :: (Read a) => FilePath
-                         -> IO (Either ConfigStateFileError a)
+tryGetConfigStateFile :: (Binary a) => FilePath
+                      -> IO (Either ConfigStateFileError a)
 tryGetConfigStateFile filename = do
   exists <- doesFileExist filename
   if not exists
-    then return (Left (missing, ConfigStateFileMissing))
-    else withFileContents filename $ \str ->
-      case lines str of
-        [header, rest] -> case checkHeader header of
-          Just err -> return (Left err)
-          Nothing  -> case reads rest of
-            [(bi,_)] -> return (Right bi)
-            _        -> return (Left (cantParse, ConfigStateFileCantParse))
-        _            -> return (Left (cantParse, ConfigStateFileCantParse))
-  where
-    checkHeader :: String -> Maybe ConfigStateFileError
-    checkHeader header = case parseHeader header of
-      Just (cabalId, compId)
-        | cabalId
-       == currentCabalId -> Nothing
-        | otherwise      -> Just (badVersion cabalId compId
-                                 ,ConfigStateFileBadVersion)
-      Nothing            -> Just (cantParse
-                                 ,ConfigStateFileCantParse)
+    then return missing
+    else do
+      bin <- decodeBinHeader
+      liftM decodeBody $ case bin of
 
-    missing   = "Run the 'configure' command first."
-    cantParse = "Saved package config file seems to be corrupt. "
-             ++ "Try re-running the 'configure' command."
+        -- Parsing the binary header may fail because the state file is in
+        -- the text format used by older versions of Cabal. When parsing the
+        -- header fails, try to parse the old text header so we can give the
+        -- user a meaningful message about their Cabal version having
+        -- changed.
+        Left (_, ConfigStateFileCantParse) -> do
+          txt <- decodeTextHeader
+          return $ case txt of
+            Left (_, ConfigStateFileBadVersion) -> txt
+            _ -> bin
+
+        _ -> return bin
+
+  where
+    decodeB :: Binary a => BS.ByteString
+            -> Either ConfigStateFileError (BS.ByteString, a)
+    decodeB str = either (const cantParse) return $ do
+        (next, _, x) <- decodeOrFail str
+        return (next, x)
+
+    decodeBody :: Binary a => Either ConfigStateFileError BS.ByteString
+               -> Either ConfigStateFileError a
+    decodeBody (Left err) = Left err
+    decodeBody (Right body) = fmap snd $ decodeB body
+
+    decodeBinHeader :: IO (Either ConfigStateFileError BS.ByteString)
+    decodeBinHeader = do
+        pbc <- BS.readFile filename
+        return $ do
+            (body, (cabalId, compId)) <- decodeB pbc
+            when (cabalId /= currentCabalId) $ badVersion cabalId compId
+            return body
+
+    decodeTextHeader :: IO (Either ConfigStateFileError BS.ByteString)
+    decodeTextHeader = do
+        header <- liftM (takeWhile $ (/=) '\n') $ readFile filename
+        return $ case parseHeader header of
+            Nothing -> cantParse
+            Just (cabalId, compId) -> badVersion cabalId compId
+
+    missing   = Left ( "Run the 'configure' command first."
+                     , ConfigStateFileMissing )
+    cantParse = Left (  "Saved package config file seems to be corrupt. "
+                     ++ "Try re-running the 'configure' command."
+                     , ConfigStateFileCantParse )
     badVersion cabalId compId
-              = "You need to re-run the 'configure' command. "
-             ++ "The version of Cabal being used has changed (was "
-             ++ display cabalId ++ ", now "
-             ++ display currentCabalId ++ ")."
-             ++ badcompiler compId
+              = Left (  "You need to re-run the 'configure' command. "
+                     ++ "The version of Cabal being used has changed (was "
+                     ++ display cabalId ++ ", now "
+                     ++ display currentCabalId ++ ")."
+                     ++ badcompiler compId
+                     , ConfigStateFileBadVersion )
     badcompiler compId | compId == currentCompilerId = ""
                        | otherwise
               = " Additionally the compiler is different (was "
@@ -216,16 +251,9 @@ maybeGetPersistBuildConfig distPref = do
 writePersistBuildConfig :: FilePath -> LocalBuildInfo -> IO ()
 writePersistBuildConfig distPref lbi = do
   createDirectoryIfMissing False distPref
+  let header = (currentCabalId, currentCompilerId)
   writeFileAtomic (localBuildInfoFile distPref)
-                  (BS.Char8.pack $ showHeader pkgid ++ '\n' : show lbi)
-  where
-    pkgid   = packageId (localPkgDescr lbi)
-
-showHeader :: PackageIdentifier -> String
-showHeader pkgid =
-     "Saved package config for " ++ display pkgid
-  ++ " written by " ++ display currentCabalId
-  ++      " using " ++ display currentCompilerId
+      $ BS.append (encode header) (encode lbi)
 
 currentCabalId :: PackageIdentifier
 currentCabalId = PackageIdentifier (PackageName "Cabal") cabalVersion
@@ -266,7 +294,13 @@ localBuildInfoFile distPref = distPref </> "setup-config"
 configure :: (GenericPackageDescription, HookedBuildInfo)
           -> ConfigFlags -> IO LocalBuildInfo
 configure (pkg_descr0, pbi) cfg
-  = do  let distPref = fromFlag (configDistPref cfg)
+  = do  unless (configLibCoverage cfg == NoFlag) $ do
+            let enable | fromFlag (configLibCoverage cfg) = "enable"
+                       | otherwise = "disable"
+            die $ "Option --" ++ enable ++ "-library-coverage is obsolete! "
+                  ++ "Please use --" ++ enable ++ "-coverage instead."
+
+        let distPref = fromFlag (configDistPref cfg)
             buildDir' = distPref </> "build"
             verbosity = fromFlag (configVerbosity cfg)
 
@@ -383,9 +417,15 @@ configure (pkg_descr0, pbi) cfg
 
         -- add extra include/lib dirs as specified in cfg
         -- we do it here so that those get checked too
-        let pkg_descr =
-                enableCoverage (fromFlag (configLibCoverage cfg)) distPref
-                $ addExtraIncludeLibDirs pkg_descr0'
+        let pkg_descr = addExtraIncludeLibDirs pkg_descr0'
+
+        unless (renamingPackageFlagsSupported comp ||
+                    and [ rn == defaultRenaming
+                        | bi <- allBuildInfo pkg_descr
+                        , rn <- Map.elems (targetBuildRenaming bi)]) $
+            die $ "Your compiler does not support thinning and renaming on "
+               ++ "package flags.  To use this feature you probably must use "
+               ++ "GHC 7.9 or later."
 
         when (not (null flags)) $
           info verbosity $ "Flags chosen: "
@@ -394,7 +434,7 @@ configure (pkg_descr0, pbi) cfg
 
         when (maybe False (not.null.PD.reexportedModules) (PD.library pkg_descr)
               && not (reexportedModulesSupported comp)) $ do
-            die $ "Your compiler does not support module reexports.  To use"
+            die $ "Your compiler does not support module re-exports. To use "
                ++ "this feature you probably must use GHC 7.9 or later."
 
         checkPackageProblems verbosity pkg_descr0
@@ -469,10 +509,14 @@ configure (pkg_descr0, pbi) cfg
 
         -- internal component graph
         buildComponents <-
-          case mkComponentsLocalBuildInfo pkg_descr
-                 internalPkgDeps externalPkgDeps pkg_key of
+          case mkComponentsGraph pkg_descr internalPkgDeps of
             Left  componentCycle -> reportComponentCycle componentCycle
-            Right components     -> return components
+            Right components     ->
+              case mkComponentsLocalBuildInfo packageDependsIndex pkg_descr
+                                              internalPkgDeps externalPkgDeps
+                                              pkg_key components of
+                Left  problems    -> reportModuleReexportProblems problems
+                Right components' -> return components'
 
         -- installation directories
         defaultDirs <- defaultInstallDirs flavor userInstall (hasLibs pkg_descr)
@@ -528,6 +572,23 @@ configure (pkg_descr0, pbi) cfg
                                          ("this compiler does not support " ++
                                           "--enable-split-objs; ignoring")
                                     return False
+
+        let ghciLibByDefault =
+              case compilerId comp of
+                CompilerId GHC _ _ ->
+                  -- If ghc is non-dynamic, then ghci needs object files,
+                  -- so we build one by default.
+                  --
+                  -- Technically, archive files should be sufficient for ghci,
+                  -- but because of GHC bug #8942, it has never been safe to
+                  -- rely on them. By the time that bug was fixed, ghci had
+                  -- been changed to read shared libraries instead of archive
+                  -- files (see next code block).
+                  not (GHC.ghcDynamic comp)
+                CompilerId GHCJS _ _ ->
+                  not (GHCJS.ghcjsDynamic comp)
+                _ -> False
+
         let sharedLibsByDefault =
               case compilerId comp of
                 CompilerId GHC _ _ ->
@@ -547,9 +608,6 @@ configure (pkg_descr0, pbi) cfg
                     compiler            = comp,
                     hostPlatform        = compPlatform,
                     buildDir            = buildDir',
-                    scratchDir          = fromFlagOrDefault
-                                            (distPref </> "scratch")
-                                            (configScratchDir cfg),
                     componentsConfigs   = buildComponents,
                     installedPkgs       = packageDependsIndex,
                     pkgDescrFile        = Nothing,
@@ -563,7 +621,8 @@ configure (pkg_descr0, pbi) cfg
                     withDynExe          = fromFlag $ configDynExe cfg,
                     withProfExe         = fromFlag $ configProfExe cfg,
                     withOptimization    = fromFlag $ configOptimization cfg,
-                    withGHCiLib         = fromFlag $ configGHCiLib cfg,
+                    withGHCiLib         = fromFlagOrDefault ghciLibByDefault $
+                                          configGHCiLib cfg,
                     splitObjs           = split_objs,
                     stripExes           = fromFlag $ configStripExes cfg,
                     stripLibs           = fromFlag $ configStripLibs cfg,
@@ -623,7 +682,7 @@ mkProgramsConfig cfg initialProgramsConfig = programsConfig
                    . setProgramSearchPath searchpath
                    $ initialProgramsConfig
     searchpath     = getProgramSearchPath (initialProgramsConfig)
-                  ++ map ProgramSearchPathDir (configProgramPathExtra cfg)
+                  ++ map ProgramSearchPathDir (fromNubList $ configProgramPathExtra cfg)
 
 -- -----------------------------------------------------------------------------
 -- Configuring package dependencies
@@ -645,14 +704,14 @@ hackageUrl = "http://hackage.haskell.org/package/"
 
 data ResolvedDependency = ExternalDependency Dependency InstalledPackageInfo
                         | InternalDependency Dependency PackageId -- should be a
-                                                                  -- lib name
+                                                                      -- lib name
 
 data FailedDependency = DependencyNotExists PackageName
                       | DependencyNoVersion Dependency
 
 -- | Test for a package dependency and record the version we have installed.
-selectDependency :: PackageIndex  -- ^ Internally defined packages
-                 -> PackageIndex  -- ^ Installed packages
+selectDependency :: InstalledPackageIndex  -- ^ Internally defined packages
+                 -> InstalledPackageIndex  -- ^ Installed packages
                  -> Map PackageName InstalledPackageInfo
                     -- ^ Packages for which we have been given specific deps to use
                  -> Dependency
@@ -714,7 +773,7 @@ reportFailedDependencies failed =
 
 getInstalledPackages :: Verbosity -> Compiler
                      -> PackageDBStack -> ProgramConfiguration
-                     -> IO PackageIndex
+                     -> IO InstalledPackageIndex
 getInstalledPackages verbosity comp packageDBs progconf = do
   when (null packageDBs) $
     die $ "No package databases have been specified. If you use "
@@ -725,10 +784,8 @@ getInstalledPackages verbosity comp packageDBs progconf = do
   case compilerFlavor comp of
     GHC   -> GHC.getInstalledPackages verbosity packageDBs progconf
     GHCJS -> GHCJS.getInstalledPackages verbosity packageDBs progconf
-    Hugs  -> Hugs.getInstalledPackages verbosity packageDBs progconf
     JHC   -> JHC.getInstalledPackages verbosity packageDBs progconf
     LHC   -> LHC.getInstalledPackages verbosity packageDBs progconf
-    NHC   -> NHC.getInstalledPackages verbosity packageDBs progconf
     UHC   -> UHC.getInstalledPackages verbosity comp packageDBs progconf
     HaskellSuite {} ->
       HaskellSuite.getInstalledPackages verbosity packageDBs progconf
@@ -738,7 +795,7 @@ getInstalledPackages verbosity comp packageDBs progconf = do
 -- | Like 'getInstalledPackages', but for a single package DB.
 getPackageDBContents :: Verbosity -> Compiler
                      -> PackageDB -> ProgramConfiguration
-                     -> IO PackageIndex
+                     -> IO InstalledPackageIndex
 getPackageDBContents verbosity comp packageDB progconf = do
   info verbosity "Reading installed packages..."
   case compilerFlavor comp of
@@ -789,7 +846,7 @@ newPackageDepsBehaviour pkg =
 -- pick.
 combinedConstraints :: [Dependency] ->
                        [(PackageName, InstalledPackageId)] ->
-                       PackageIndex ->
+                       InstalledPackageIndex ->
                        Either String ([Dependency],
                                       Map PackageName InstalledPackageInfo)
 combinedConstraints constraints dependencies installedPackages = do
@@ -1000,8 +1057,6 @@ configCompilerEx (Just hcFlavor) hcPath hcPkg conf verbosity = do
     JHC   -> JHC.configure  verbosity hcPath hcPkg conf
     LHC   -> do (_, _, ghcConf) <- GHC.configure  verbosity Nothing hcPkg conf
                 LHC.configure  verbosity hcPath Nothing ghcConf
-    Hugs  -> Hugs.configure verbosity hcPath hcPkg conf
-    NHC   -> NHC.configure  verbosity hcPath hcPkg conf
     UHC   -> UHC.configure  verbosity hcPath hcPkg conf
     HaskellSuite {} -> HaskellSuite.configure verbosity hcPath hcPkg conf
     _    -> die "Unknown compiler"
@@ -1030,20 +1085,16 @@ configCompilerAux = fmap (\(a,_,b) -> (a,b)) . configCompilerAuxEx
 -- Making the internal component graph
 
 
-mkComponentsLocalBuildInfo :: PackageDescription
-                           -> [PackageId] -> [InstalledPackageInfo]
-                           -> PackageKey
-                           -> Either [ComponentName]
-                                     [(ComponentName,
-                                       ComponentLocalBuildInfo, [ComponentName])]
-mkComponentsLocalBuildInfo pkg_descr internalPkgDeps externalPkgDeps pkg_key =
+mkComponentsGraph :: PackageDescription
+                  -> [PackageId]
+                  -> Either [ComponentName]
+                            [(Component, [ComponentName])]
+mkComponentsGraph pkg_descr internalPkgDeps =
     let graph = [ (c, componentName c, componentDeps c)
                 | c <- pkgEnabledComponents pkg_descr ]
      in case checkComponentsCyclic graph of
           Just ccycle -> Left  [ cname | (_,cname,_) <- ccycle ]
-          Nothing     -> Right [ (cname, clbi, cdeps)
-                               | (c, cname, cdeps) <- graph
-                               , let clbi = componentLocalBuildInfo c ]
+          Nothing     -> Right [ (c, cdeps) | (c, _, cdeps) <- graph ]
   where
     -- The dependencies for the given component
     componentDeps component =
@@ -1057,6 +1108,28 @@ mkComponentsLocalBuildInfo pkg_descr internalPkgDeps externalPkgDeps pkg_key =
       where
         bi = componentBuildInfo component
 
+reportComponentCycle :: [ComponentName] -> IO a
+reportComponentCycle cnames =
+    die $ "Components in the package depend on each other in a cyclic way:\n  "
+       ++ intercalate " depends on "
+            [ "'" ++ showComponentName cname ++ "'"
+            | cname <- cnames ++ [head cnames] ]
+
+mkComponentsLocalBuildInfo :: InstalledPackageIndex
+                           -> PackageDescription
+                           -> [PackageId] -> [InstalledPackageInfo]
+                           -> PackageKey
+                           -> [(Component, [ComponentName])]
+                           -> Either [(ModuleReexport, String)] -- errors
+                                     [(ComponentName, ComponentLocalBuildInfo,
+                                                      [ComponentName])] -- ok
+mkComponentsLocalBuildInfo installedPackages pkg_descr
+                           internalPkgDeps externalPkgDeps pkg_key graph =
+    sequence
+      [ do clbi <- componentLocalBuildInfo c
+           return (componentName c, clbi, cdeps)
+      | (c, cdeps) <- graph ]
+  where
     -- The allPkgDeps contains all the package deps for the whole package
     -- but we need to select the subset for this specific component.
     -- we just take the subset for the package names this component
@@ -1064,23 +1137,30 @@ mkComponentsLocalBuildInfo pkg_descr internalPkgDeps externalPkgDeps pkg_key =
     -- versions of the same package.
     componentLocalBuildInfo component =
       case component of
-      CLib _ ->
-        LibComponentLocalBuildInfo {
+      CLib lib -> do
+        reexports <- resolveModuleReexports installedPackages
+                                            (packageId pkg_descr)
+                                            externalPkgDeps lib
+        return LibComponentLocalBuildInfo {
           componentPackageDeps = cpds,
-          componentLibraries = [LibraryName
-                                ("HS" ++ display pkg_key)]
+          componentLibraries   = [LibraryName ("HS" ++ display pkg_key)],
+          componentPackageRenaming = cprns,
+          componentModuleReexports = reexports
         }
       CExe _ ->
-        ExeComponentLocalBuildInfo {
-          componentPackageDeps = cpds
+        return ExeComponentLocalBuildInfo {
+          componentPackageDeps = cpds,
+          componentPackageRenaming = cprns
         }
       CTest _ ->
-        TestComponentLocalBuildInfo {
-          componentPackageDeps = cpds
+        return TestComponentLocalBuildInfo {
+          componentPackageDeps = cpds,
+          componentPackageRenaming = cprns
         }
       CBench _ ->
-        BenchComponentLocalBuildInfo {
-          componentPackageDeps = cpds
+        return BenchComponentLocalBuildInfo {
+          componentPackageDeps = cpds,
+          componentPackageRenaming = cprns
         }
       where
         bi = componentBuildInfo component
@@ -1091,20 +1171,151 @@ mkComponentsLocalBuildInfo pkg_descr internalPkgDeps externalPkgDeps pkg_key =
                     | pkgid <- selectSubset bi internalPkgDeps ]
                else [ (installedPackageId pkg, packageId pkg)
                     | pkg <- externalPkgDeps ]
+        cprns = if newPackageDepsBehaviour pkg_descr
+                then targetBuildRenaming bi
+                -- Hack: if we have old package-deps behavior, it's impossible
+                -- for non-default renamings to be used, because the Cabal
+                -- version is too early.  This is a good, because while all the
+                -- deps were bundled up in buildDepends, we didn't do this for
+                -- renamings, so it's not even clear how to get the merged
+                -- version.  So just assume that all of them are the default..
+                else Map.fromList (map (\(_,pid) -> (packageName pid, defaultRenaming)) cpds)
 
     selectSubset :: Package pkg => BuildInfo -> [pkg] -> [pkg]
     selectSubset bi pkgs =
-        [ pkg | pkg <- pkgs, packageName pkg `elem` names ]
-      where
-        names = [ name | Dependency name _ <- targetBuildDepends bi ]
+        [ pkg | pkg <- pkgs, packageName pkg `elem` names bi ]
 
-reportComponentCycle :: [ComponentName] -> IO a
-reportComponentCycle cnames =
-    die $ "Components in the package depend on each other in a cyclic way:\n  "
-       ++ intercalate " depends on "
-            [ "'" ++ showComponentName cname ++ "'"
-            | cname <- cnames ++ [head cnames] ]
+    names bi = [ name | Dependency name _ <- targetBuildDepends bi ]
 
+-- | Given the author-specified re-export declarations from the .cabal file,
+-- resolve them to the form that we need for the package database.
+--
+-- An invariant of the package database is that we always link the re-export
+-- directly to its original defining location (rather than indirectly via a
+-- chain of re-exporting packages).
+--
+resolveModuleReexports :: InstalledPackageIndex
+                       -> PackageId
+                       -> [InstalledPackageInfo]
+                       -> Library
+                       -> Either [(ModuleReexport, String)] -- errors
+                                 [Installed.ModuleReexport] -- ok
+resolveModuleReexports installedPackages srcpkgid externalPkgDeps lib =
+    case partitionEithers (map resolveModuleReexport (PD.reexportedModules lib)) of
+      ([],  ok) -> Right ok
+      (errs, _) -> Left  errs
+  where
+    -- A mapping from visible module names to their original defining
+    -- module name and package.
+    visibleModules :: Map ModuleName [(PackageName, ModuleName, InstalledPackageId)]
+    visibleModules =
+      Map.fromListWith (++) $
+        [ (visibleModuleName, [(exportingPackageName,
+                                definingModuleName,
+                                definingPackageId)])
+          -- The package index here contains all the indirect deps of the
+          -- package we're configuring, but we want just the direct deps
+        | let directDeps = Set.fromList (map installedPackageId externalPkgDeps)
+        , pkg <- PackageIndex.allPackages installedPackages
+        , installedPackageId pkg `Set.member` directDeps
+        , let exportingPackageName = packageName pkg
+        , (visibleModuleName, definingModuleName, definingPackageId)
+             <- visibleModuleDetails pkg
+        ]
+     ++ [ (visibleModuleName, [(exportingPackageName,
+                                definingModuleName,
+                                definingPackageId)])
+        | visibleModuleName <- PD.exposedModules lib
+                            ++ otherModules (libBuildInfo lib)
+        , let exportingPackageName = packageName srcpkgid
+              definingModuleName   = visibleModuleName
+              -- we don't know the InstalledPackageId of this package yet
+              -- we will fill it in later, before registration.
+              definingPackageId    = InstalledPackageId ""
+        ]
+
+    -- All the modules exported from this package and their defining name and
+    -- package (either defined here in this package or re-exported from some
+    -- other package)
+    visibleModuleDetails :: InstalledPackageInfo
+                         -> [(ModuleName, ModuleName, InstalledPackageId)]
+    visibleModuleDetails pkg =
+        -- The first case is the modules actually defined in this package.
+        -- In this case the visible and original names are the same, and the
+        -- defining package is this one.
+        [ (visibleModuleName, definingModuleName, definingPackageId)
+        | visibleModuleName <- Installed.exposedModules pkg
+        , let definingModuleName = visibleModuleName
+              definingPackageId  = installedPackageId pkg
+        ]
+        -- On the other hand, a visible module might actually be itself
+        -- a re-export! In this case, the re-export info for the package
+        -- doing the re-export will point us to the original defining
+        -- module name and package.
+     ++ [ (visibleModuleName, definingModuleName, definingPackageId)
+        | Installed.ModuleReexport {
+            Installed.moduleReexportName            = visibleModuleName,
+            Installed.moduleReexportDefiningName    = definingModuleName,
+            Installed.moduleReexportDefiningPackage = definingPackageId
+          } <- Installed.reexportedModules pkg
+        ]
+
+    resolveModuleReexport reexport@ModuleReexport {
+         moduleReexportOriginalPackage = moriginalPackageName,
+         moduleReexportOriginalName    = originalName,
+         moduleReexportName            = newName
+      } =
+
+      let filterForSpecificPackage =
+            case moriginalPackageName of
+              Nothing                  -> id
+              Just originalPackageName ->
+                filter (\(pkgname, _, _) -> pkgname == originalPackageName)
+
+          matches = filterForSpecificPackage
+                      (Map.findWithDefault [] originalName visibleModules)
+      in
+      case (matches, moriginalPackageName) of
+        ((_, definingModuleName, definingPackageId):rest, _)
+          | all (\(_, n, p) -> n == definingModuleName && p == definingPackageId) rest
+           -> Right Installed.ModuleReexport {
+                 Installed.moduleReexportDefiningName    = definingModuleName,
+                 Installed.moduleReexportDefiningPackage = definingPackageId,
+                 Installed.moduleReexportName            = newName
+              }
+
+        ([], Just originalPackageName)
+           -> Left $ (,) reexport
+                   $ "The package " ++ display originalPackageName
+                  ++ " does not export a module " ++ display originalName
+
+        ([], Nothing)
+           -> Left $ (,) reexport
+                   $ "The module " ++ display originalName
+                  ++ " is not exported by any suitable package (this package "
+                  ++ "itself nor any of its 'build-depends' dependencies)."
+
+        (ms, _)
+           -> Left $ (,) reexport
+                   $ "The module " ++ display originalName ++ " is exported "
+                  ++ "by more than one package ("
+                  ++ intercalate ", " [ display pkgname | (pkgname,_,_) <- ms ]
+                  ++ ") and so the re-export is ambiguous. The ambiguity can "
+                  ++ "be resolved by qualifying by the package name. The "
+                  ++ "syntax is 'packagename:moduleName [as newname]'."
+
+        -- Note: if in future Cabal allows directly depending on multiple
+        -- instances of the same package (e.g. backpack) then an additional
+        -- ambiguity case is possible here: (_, Just originalPackageName)
+        -- with the module being ambigious despite being qualified by a
+        -- package name. Presumably by that time we'll have a mechanism to
+        -- qualify the instance we're referring to.
+
+reportModuleReexportProblems :: [(ModuleReexport, String)] -> IO a
+reportModuleReexportProblems reexportProblems =
+  die $ unlines
+    [ "Problem with the module re-export '" ++ display reexport ++ "': " ++ msg
+    | (reexport, msg) <- reexportProblems ]
 
 -- -----------------------------------------------------------------------------
 -- Testing C lib and header dependencies

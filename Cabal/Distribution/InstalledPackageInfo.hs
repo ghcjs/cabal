@@ -1,3 +1,5 @@
+{-# LANGUAGE DeriveGeneric #-}
+
 -----------------------------------------------------------------------------
 -- |
 -- Module      :  Distribution.InstalledPackageInfo
@@ -22,40 +24,11 @@
 -- textual format is rather simpler than the @.cabal@ format: there are no
 -- sections, for example.
 
-{- All rights reserved.
-
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions are
-met:
-
-    * Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-
-    * Redistributions in binary form must reproduce the above
-      copyright notice, this list of conditions and the following
-      disclaimer in the documentation and/or other materials provided
-      with the distribution.
-
-    * Neither the name of the University nor the names of other
-      contributors may be used to endorse or promote products derived
-      from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
-"AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
-LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
-A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
-OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
-SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
-LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
-DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
-THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE. -}
-
 -- This module is meant to be local-only to Distribution...
 
 module Distribution.InstalledPackageInfo (
         InstalledPackageInfo_(..), InstalledPackageInfo,
+        ModuleReexport(..),
         ParseResult(..), PError(..), PWarning,
         emptyInstalledPackageInfo,
         parseInstalledPackageInfo,
@@ -79,15 +52,17 @@ import Distribution.Package
          , PackageId, InstalledPackageId(..)
          , packageName, packageVersion, PackageKey(..) )
 import qualified Distribution.Package as Package
-         ( Package(..) )
 import Distribution.ModuleName
          ( ModuleName )
-import Distribution.ModuleExport
-         ( ModuleExport(..) )
 import Distribution.Version
          ( Version(..) )
 import Distribution.Text
          ( Text(disp, parse) )
+import Text.PrettyPrint as Disp
+import qualified Distribution.Compat.ReadP as Parse
+
+import Data.Binary (Binary)
+import GHC.Generics (Generic)
 
 -- -----------------------------------------------------------------------------
 -- The InstalledPackageInfo type
@@ -112,10 +87,10 @@ data InstalledPackageInfo_ m
         -- these parts are required by an installed package only:
         exposed           :: Bool,
         exposedModules    :: [m],
-        reexportedModules :: [ModuleExport m],
+        reexportedModules :: [ModuleReexport],
         hiddenModules     :: [m],
         trusted           :: Bool,
-        importDirs        :: [FilePath],  -- contain sources in case of Hugs
+        importDirs        :: [FilePath],
         libraryDirs       :: [FilePath],
         hsLibraries       :: [String],
         extraLibraries    :: [String],
@@ -123,7 +98,6 @@ data InstalledPackageInfo_ m
         includeDirs       :: [FilePath],
         includes          :: [String],
         depends           :: [InstalledPackageId],
-        hugsOptions       :: [String],
         ccOptions         :: [String],
         ldOptions         :: [String],
         frameworkDirs     :: [FilePath],
@@ -131,10 +105,16 @@ data InstalledPackageInfo_ m
         haddockInterfaces :: [FilePath],
         haddockHTMLs      :: [FilePath]
     }
-    deriving (Read, Show)
+    deriving (Generic, Read, Show)
+
+instance Binary m => Binary (InstalledPackageInfo_ m)
 
 instance Package.Package          (InstalledPackageInfo_ str) where
    packageId = sourcePackageId
+
+instance Package.PackageInstalled (InstalledPackageInfo_ str) where
+   installedPackageId = installedPackageId
+   installedDepends = depends
 
 type InstalledPackageInfo = InstalledPackageInfo_ ModuleName
 
@@ -145,7 +125,7 @@ emptyInstalledPackageInfo
         sourcePackageId    = PackageIdentifier (PackageName "") noVersion,
         packageKey         = OldPackageKey (PackageIdentifier
                                                (PackageName "") noVersion),
-        license           = AllRightsReserved,
+        license           = UnspecifiedLicense,
         copyright         = "",
         maintainer        = "",
         author            = "",
@@ -168,7 +148,6 @@ emptyInstalledPackageInfo
         includeDirs       = [],
         includes          = [],
         depends           = [],
-        hugsOptions       = [],
         ccOptions         = [],
         ldOptions         = [],
         frameworkDirs     = [],
@@ -181,11 +160,39 @@ noVersion :: Version
 noVersion = Version{ versionBranch=[], versionTags=[] }
 
 -- -----------------------------------------------------------------------------
+-- Module re-exports
+
+data ModuleReexport = ModuleReexport {
+       moduleReexportDefiningPackage :: InstalledPackageId,
+       moduleReexportDefiningName    :: ModuleName,
+       moduleReexportName            :: ModuleName
+    }
+    deriving (Generic, Read, Show)
+
+instance Binary ModuleReexport
+
+instance Text ModuleReexport where
+    disp (ModuleReexport pkgid origname newname) =
+          disp pkgid <> Disp.char ':' <> disp origname
+      <+> Disp.text "as" <+> disp newname
+
+    parse = do
+      pkgid    <- parse
+      _ <- Parse.char ':'
+      origname <- parse
+      Parse.skipSpaces
+      _ <- Parse.string "as"
+      Parse.skipSpaces
+      newname  <- parse
+      return (ModuleReexport pkgid origname newname)
+
+-- -----------------------------------------------------------------------------
 -- Parsing
 
 parseInstalledPackageInfo :: String -> ParseResult InstalledPackageInfo
 parseInstalledPackageInfo =
-    parseFieldsFlat fieldsInstalledPackageInfo emptyInstalledPackageInfo
+    parseFieldsFlat (fieldsInstalledPackageInfo ++ deprecatedFieldDescrs)
+    emptyInstalledPackageInfo
 
 -- -----------------------------------------------------------------------------
 -- Pretty-printing
@@ -290,9 +297,6 @@ installedFieldDescrs = [
  , listField   "depends"
         disp               parse
         depends            (\xs pkg -> pkg{depends=xs})
- , listField   "hugs-options"
-        showToken          parseTokenQ
-        hugsOptions        (\path  pkg -> pkg{hugsOptions=path})
  , listField   "cc-options"
         showToken          parseTokenQ
         ccOptions          (\path  pkg -> pkg{ccOptions=path})
@@ -312,3 +316,10 @@ installedFieldDescrs = [
         showFilePath       parseFilePathQ
         haddockHTMLs       (\xs pkg -> pkg{haddockHTMLs=xs})
  ]
+
+deprecatedFieldDescrs :: [FieldDescr InstalledPackageInfo]
+deprecatedFieldDescrs = [
+   listField   "hugs-options"
+        showToken          parseTokenQ
+        (const [])        (const id)
+  ]

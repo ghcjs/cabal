@@ -39,6 +39,7 @@ import Distribution.Client.ParseUtils  ( parseFields, ppFields, ppSection )
 import Distribution.Client.Setup       ( GlobalFlags(..), ConfigExFlags(..)
                                        , InstallFlags(..)
                                        , defaultSandboxLocation )
+import Distribution.Utils.NubList            ( toNubList )
 import Distribution.Simple.Compiler    ( Compiler, PackageDB(..)
                                        , compilerFlavor, showCompilerId )
 import Distribution.Simple.InstallDirs ( InstallDirs(..), PathTemplate
@@ -200,12 +201,12 @@ initialPackageEnvironment sandboxDir compiler platform = do
        savedUserInstallDirs   = installDirs,
        savedGlobalInstallDirs = installDirs,
        savedGlobalFlags = (savedGlobalFlags initialConfig) {
-          globalLocalRepos = [sandboxDir </> "packages"]
+          globalLocalRepos = toNubList [sandboxDir </> "packages"]
           },
        savedConfigureFlags = setPackageDB sandboxDir compiler platform
                              (savedConfigureFlags initialConfig),
        savedInstallFlags = (savedInstallFlags initialConfig) {
-         installSummaryFile = [toPathTemplate (sandboxDir </>
+         installSummaryFile = toNubList [toPathTemplate (sandboxDir </>
                                                "logs" </> "build.log")]
          }
        }
@@ -218,7 +219,9 @@ sandboxPackageDBPath sandboxDir compiler platform =
          </> (Text.display platform ++ "-"
              ++ showCompilerId compiler
              ++ "-packages.conf.d")
-
+-- The path in sandboxPackageDBPath should be kept in sync with the
+-- path in the bootstrap.sh which is used to bootstrap cabal-install
+-- into a sandbox.
 
 -- | Use the package DB location specific for this compiler.
 setPackageDB :: FilePath -> Compiler -> Platform -> ConfigFlags -> ConfigFlags
@@ -470,10 +473,7 @@ parsePackageEnvironment initial str = do
           configProgramPaths  = paths,
           configProgramArgs   = args
           },
-       savedHaddockFlags      = haddockFlags {
-         haddockProgramPaths  = paths,
-         haddockProgramArgs   = args
-         },
+       savedHaddockFlags      = haddockFlags,
        savedUserInstallDirs   = installDirs,
        savedGlobalInstallDirs = installDirs
        }

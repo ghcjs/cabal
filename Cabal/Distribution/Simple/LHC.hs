@@ -220,7 +220,7 @@ getExtensions verbosity lhcProg = do
              | Just ext <- map readExtension (lines exts) ]
 
 getInstalledPackages :: Verbosity -> PackageDBStack -> ProgramConfiguration
-                     -> IO PackageIndex
+                     -> IO InstalledPackageIndex
 getInstalledPackages verbosity packagedbs conf = do
   checkPackageDbStack packagedbs
   pkgss <- getInstalledPackages' lhcPkg verbosity packagedbs conf

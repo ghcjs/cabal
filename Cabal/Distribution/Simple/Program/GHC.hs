@@ -13,17 +13,20 @@ module Distribution.Simple.Program.GHC (
 
 import Distribution.Simple.GHC.Props ( getImplProps, ImplProps(..) )
 import Distribution.Package
+import Distribution.PackageDescription hiding (Flag)
 import Distribution.ModuleName
 import Distribution.Simple.Compiler hiding (Flag)
 import Distribution.Simple.Setup    ( Flag(..), flagToMaybe, fromFlagOrDefault,
                                       flagToList )
---import Distribution.Simple.LocalBuildInfo
 import Distribution.Simple.Program.Types
 import Distribution.Simple.Program.Run
 import Distribution.Text
 import Distribution.Verbosity
+import Distribution.Utils.NubList (NubListR, fromNubListR)
+import Distribution.Version
 import Language.Haskell.Extension   ( Language(..), Extension(..) )
 
+import qualified Data.Map as M
 import Data.Monoid
 
 -- | A structured set of GHC options/flags
@@ -35,20 +38,20 @@ data GhcOptions = GhcOptions {
 
   -- | Any extra options to pass directly to ghc. These go at the end and hence
   -- override other stuff.
-  ghcOptExtra         :: [String],
+  ghcOptExtra         :: NubListR String,
 
   -- | Extra default flags to pass directly to ghc. These go at the beginning
   -- and so can be overridden by other stuff.
-  ghcOptExtraDefault  :: [String],
+  ghcOptExtraDefault  :: NubListR String,
 
   -----------------------
   -- Inputs and outputs
 
   -- | The main input files; could be .hs, .hi, .c, .o, depending on mode.
-  ghcOptInputFiles    :: [FilePath],
+  ghcOptInputFiles    :: NubListR FilePath,
 
   -- | The names of input Haskell modules, mainly for @--make@ mode.
-  ghcOptInputModules  :: [ModuleName],
+  ghcOptInputModules  :: NubListR ModuleName,
 
   -- | Location for output file; the @ghc -o@ flag.
   ghcOptOutputFile    :: Flag FilePath,
@@ -62,66 +65,70 @@ data GhcOptions = GhcOptions {
   ghcOptSourcePathClear :: Flag Bool,
 
   -- | Search path for Haskell source files; the @ghc -i@ flag.
-  ghcOptSourcePath    :: [FilePath],
+  ghcOptSourcePath    :: NubListR FilePath,
 
   -------------
   -- Packages
 
-  -- | The package key the modules will belong to; the @ghc -this-package-key@ flag
+  -- | The package key the modules will belong to; the @ghc -this-package-key@
+  -- flag.
   ghcOptPackageKey   :: Flag PackageKey,
 
-  -- | GHC package databases to use, the @ghc -package-conf@ flag
+  -- | GHC package databases to use, the @ghc -package-conf@ flag.
   ghcOptPackageDBs    :: PackageDBStack,
 
   -- | The GHC packages to use. For compatability with old and new ghc, this
   -- requires both the short and long form of the package id;
   -- the @ghc -package@ or @ghc -package-id@ flags.
-  ghcOptPackages      :: [(InstalledPackageId, PackageId)],
+  ghcOptPackages      ::
+    NubListR (InstalledPackageId, PackageId, ModuleRenaming),
 
   -- | Start with a clean package set; the @ghc -hide-all-packages@ flag
   ghcOptHideAllPackages :: Flag Bool,
 
-  -- | Don't automatically link in Haskell98 etc; the @ghc -no-auto-link-packages@ flag.
+  -- | Don't automatically link in Haskell98 etc; the @ghc
+  -- -no-auto-link-packages@ flag.
   ghcOptNoAutoLinkPackages :: Flag Bool,
 
   -----------------
   -- Linker stuff
 
   -- | Names of libraries to link in; the @ghc -l@ flag.
-  ghcOptLinkLibs      :: [FilePath],
+  ghcOptLinkLibs      :: NubListR FilePath,
 
   -- | Search path for libraries to link in; the @ghc -L@ flag.
-  ghcOptLinkLibPath  :: [FilePath],
+  ghcOptLinkLibPath  :: NubListR FilePath,
 
   -- | Options to pass through to the linker; the @ghc -optl@ flag.
-  ghcOptLinkOptions   :: [String],
+  ghcOptLinkOptions   :: NubListR String,
 
   -- | OSX only: frameworks to link in; the @ghc -framework@ flag.
-  ghcOptLinkFrameworks :: [String],
+  ghcOptLinkFrameworks :: NubListR String,
 
   -- | Don't do the link step, useful in make mode; the @ghc -no-link@ flag.
   ghcOptNoLink :: Flag Bool,
 
-  -- | Don't link in the normal RTS @main@ entry point; the @ghc -no-hs-main@ flag.
+  -- | Don't link in the normal RTS @main@ entry point; the @ghc -no-hs-main@
+  -- flag.
   ghcOptLinkNoHsMain :: Flag Bool,
 
   --------------------
   -- C and CPP stuff
 
   -- | Options to pass through to the C compiler; the @ghc -optc@ flag.
-  ghcOptCcOptions     :: [String],
+  ghcOptCcOptions     :: NubListR String,
 
   -- | Options to pass through to CPP; the @ghc -optP@ flag.
-  ghcOptCppOptions    :: [String],
+  ghcOptCppOptions    :: NubListR String,
 
   -- | Search path for CPP includes like header files; the @ghc -I@ flag.
-  ghcOptCppIncludePath :: [FilePath],
+  ghcOptCppIncludePath :: NubListR FilePath,
 
   -- | Extra header files to include at CPP stage; the @ghc -optP-include@ flag.
-  ghcOptCppIncludes    :: [FilePath],
+  ghcOptCppIncludes    :: NubListR FilePath,
 
   -- | Extra header files to include for old-style FFI; the @ghc -#include@ flag.
-  ghcOptFfiIncludes    :: [FilePath],
+  ghcOptFfiIncludes    :: NubListR FilePath,
 
   ----------------------------
   -- Language and extensions
@@ -130,11 +137,11 @@ data GhcOptions = GhcOptions {
   ghcOptLanguage      :: Flag Language,
 
   -- | The language extensions; the @ghc -X@ flag.
-  ghcOptExtensions    :: [Extension],
+  ghcOptExtensions    :: NubListR Extension,
 
   -- | A GHC version-dependent mapping of extensions to flags. This must be
   -- set to be able to make use of the 'ghcOptExtensions'.
-  ghcOptExtensionMap    :: [(Extension, String)],
+  ghcOptExtensionMap    :: M.Map Extension String,
 
   ----------------
   -- Compilation
@@ -151,11 +158,14 @@ data GhcOptions = GhcOptions {
   -- | Run N jobs simultaneously (if possible).
   ghcOptNumJobs       :: Flag Int,
 
+  -- | Enable coverage analysis; the @ghc -fhpc -hpcdir@ flags.
+  ghcOptHPCDir        :: Flag FilePath,
+
   ----------------
   -- GHCi
 
   -- | Extra GHCi startup scripts; the @-ghci-script@ flag
-  ghcOptGHCiScripts    :: [FilePath],
+  ghcOptGHCiScripts    :: NubListR FilePath,
 
   ------------------------
   -- Redirecting outputs
@@ -263,6 +273,9 @@ renderGhcOptions comp opts
 
   , [ "-split-objs" | flagBool ghcOptSplitObjs ]
 
+  , case flagToMaybe (ghcOptHPCDir opts) of
+      Nothing -> []
+      Just hpcdir -> ["-fhpc", "-hpcdir", hpcdir]
 
   , if parmakeSupported comp
     then
@@ -308,9 +321,10 @@ renderGhcOptions comp opts
 
   , [ "-I"    ++ dir | dir <- flags ghcOptCppIncludePath ]
   , [ "-optP" ++ opt | opt <- flags ghcOptCppOptions ]
-  , concat [ [ "-optP-include", "-optP" ++ inc] | inc <- flags ghcOptCppIncludes ]
-  , [ "-#include \"" ++ inc ++ "\"" | inc <- flags ghcOptFfiIncludes
-                                    , flagFfiIncludes props ]
+  , concat [ [ "-optP-include", "-optP" ++ inc]
+           | inc <- flags ghcOptCppIncludes ]
+  , [ "-#include \"" ++ inc ++ "\""
+    | inc <- flags ghcOptFfiIncludes, flagFfiIncludes props ]
   , [ "-optc" ++ opt | opt <- flags ghcOptCcOptions ]
 
   -----------------
@@ -333,11 +347,15 @@ renderGhcOptions comp opts
   , [ "-hide-all-packages"     | flagBool ghcOptHideAllPackages ]
   , [ "-no-auto-link-packages" | flagBool ghcOptNoAutoLinkPackages ]
 
-  , packageDbArgs props (flags ghcOptPackageDBs)
+  , packageDbArgs props (ghcOptPackageDBs opts)
 
   , concat $ if flagPackageId props
-      then [ ["-package-id", display ipkgid] | (ipkgid,_) <- flags ghcOptPackages ]
-      else [ ["-package",    display  pkgid] | (_,pkgid)  <- flags ghcOptPackages ]
+      then let space "" = ""
+               space xs = ' ' : xs
+           in [ ["-package-id", display ipkgid ++ space (display rns)]
+              | (ipkgid,_,rns) <- flags ghcOptPackages ]
+      else [ ["-package",    display  pkgid]
+           | (_,pkgid,_)  <- flags ghcOptPackages ]
 
   ----------------------------
   -- Language and extensions
@@ -346,11 +364,11 @@ renderGhcOptions comp opts
     then [ "-X" ++ display lang | lang <- flag ghcOptLanguage ]
     else []
 
-  , [ case lookup ext (ghcOptExtensionMap opts) of
+  , [ case M.lookup ext (ghcOptExtensionMap opts) of
         Just arg -> arg
         Nothing  -> error $ "Distribution.Simple.Program.GHC.renderGhcOptions: "
                           ++ display ext ++ " not present in ghcOptExtensionMap."
-    | ext <- ghcOptExtensions opts ]
+    | ext <- flags ghcOptExtensions ]
 
   ----------------
   -- GHCi
@@ -362,7 +380,7 @@ renderGhcOptions comp opts
   -- Inputs
 
   , [ display modu | modu <- flags ghcOptInputModules ]
-  , ghcOptInputFiles opts
+  , flags ghcOptInputFiles
 
   , concat [ [ "-o",    out] | out <- flag ghcOptOutputFile ]
   , concat [ [ "-dyno", out] | out <- flag ghcOptOutputDynFile ]
@@ -370,7 +388,7 @@ renderGhcOptions comp opts
   ---------------
   -- Extra
 
-  , ghcOptExtra opts
+  , flags ghcOptExtra
 
   ]
 
@@ -378,7 +396,7 @@ renderGhcOptions comp opts
   where
     props        = getImplProps comp
     flag     flg = flagToList (flg opts)
-    flags    flg = flg opts
+    flags    flg = fromNubListR . flg $ opts
     flagBool flg = fromFlagOrDefault False (flg opts)
 
 verbosityOpts :: Verbosity -> [String]
@@ -443,6 +461,7 @@ instance Monoid GhcOptions where
     ghcOptProfilingMode      = mempty,
     ghcOptSplitObjs          = mempty,
     ghcOptNumJobs            = mempty,
+    ghcOptHPCDir             = mempty,
     ghcOptGHCiScripts        = mempty,
     ghcOptHiSuffix           = mempty,
     ghcOptObjSuffix          = mempty,
@@ -492,6 +511,7 @@ instance Monoid GhcOptions where
     ghcOptProfilingMode      = combine ghcOptProfilingMode,
     ghcOptSplitObjs          = combine ghcOptSplitObjs,
     ghcOptNumJobs            = combine ghcOptNumJobs,
+    ghcOptHPCDir             = combine ghcOptHPCDir,
     ghcOptGHCiScripts        = combine ghcOptGHCiScripts,
     ghcOptHiSuffix           = combine ghcOptHiSuffix,
     ghcOptObjSuffix          = combine ghcOptObjSuffix,

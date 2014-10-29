@@ -28,7 +28,27 @@ CURL="${CURL:-curl}"
 FETCH="${FETCH:-fetch}"
 TAR="${TAR:-tar}"
 GZIP_PROGRAM="${GZIP_PROGRAM:-gzip}"
-SCOPE_OF_INSTALLATION="--user"
+
+# The variable SCOPE_OF_INSTALLATION can be set on the command line to
+# use/install the libaries needed to build cabal-install to a custom package
+# database instead of the user or global package database.
+#
+# Example:
+#
+# $ ghc-pkg init /my/package/database
+# $ SCOPE_OF_INSTALLATION='--package-db=/my/package/database' ./bootstrap.sh
+#
+# You can also combine SCOPE_OF_INSTALLATION with PREFIX:
+#
+# $ ghc-pkg init /my/prefix/packages.conf.d
+# $ SCOPE_OF_INSTALLATION='--package-db=/my/prefix/packages.conf.d' \
+#   PREFIX=/my/prefix ./bootstrap.sh
+#
+# If you use the --global,--user or --sandbox arguments, this will
+# override the SCOPE_OF_INSTALLATION setting and not use the package
+# database you pass in the SCOPE_OF_INSTALLATION variable.
+
+SCOPE_OF_INSTALLATION="${SCOPE_OF_INSTALLATION:---user}"
 DEFAULT_PREFIX="${HOME}/.cabal"
 
 # Try to respect $TMPDIR but override if needed - see #1710.
@@ -87,21 +107,30 @@ GHC_PKG_VER="$(${GHC_PKG} --version | cut -d' ' -f 5)"
   die "Version mismatch between ${GHC} and ${GHC_PKG}.
        If you set the GHC variable then set GHC_PKG too."
 
-for arg in "$@"
-do
-  case "${arg}" in
+while [ "$#" -gt 0 ]; do
+  case "${1}" in
     "--user")
-      SCOPE_OF_INSTALLATION=${arg}
+      SCOPE_OF_INSTALLATION="${1}"
       shift;;
     "--global")
-      SCOPE_OF_INSTALLATION=${arg}
+      SCOPE_OF_INSTALLATION="${1}"
       DEFAULT_PREFIX="/usr/local"
       shift;;
+    "--sandbox")
+      shift
+      # check if there is another argument which doesn't start with --
+      if [ "$#" -le 0 ] || [ ! -z $(echo "${1}" | grep "^--") ]
+      then
+          SANDBOX=".cabal-sandbox"
+      else
+          SANDBOX="${1}"
+          shift
+      fi;;
     "--no-doc")
       NO_DOCUMENTATION=1
       shift;;
     *)
-      echo "Unknown argument or option, quitting: ${arg}"
+      echo "Unknown argument or option, quitting: ${1}"
       echo "usage: bootstrap.sh [OPTION]"
       echo
       echo "options:"
@@ -111,6 +140,29 @@ do
       exit;;
   esac
 done
+
+abspath () { case "$1" in /*)printf "%s\n" "$1";; *)printf "%s\n" "$PWD/$1";;
+             esac; }
+
+if [ ! -z "$SANDBOX" ]
+then # set up variables for sandbox bootstrap
+  # Make the sandbox path absolute since it will be used from
+  # different working directories when the dependency packages are
+  # installed.
+  SANDBOX=$(abspath "$SANDBOX")
+  # Get the name of the package database which cabal sandbox would use.
+  GHC_ARCH=$(ghc --info |
+    sed -n 's/.*"Target platform".*"\([^-]\+\)-[^-]\+-\([^"]\+\)".*/\1-\2/p')
+  PACKAGEDB="$SANDBOX/${GHC_ARCH}-ghc-${GHC_VER}-packages.conf.d"
+  # Assume that if the directory is already there, it is already a
+  # package database. We will get an error immediately below if it
+  # isn't. Uses -r to try to be compatible with Solaris, and allow
+  # symlinks as well as a normal dir/file.
+  [ ! -r "$PACKAGEDB" ] && ghc-pkg init "$PACKAGEDB"
+  PREFIX="$SANDBOX"
+  SCOPE_OF_INSTALLATION="--package-db=$PACKAGEDB"
+  echo Bootstrapping in sandbox at \'$SANDBOX\'.
+fi
 
 # Check for haddock unless no documentation should be generated.
 if [ ! ${NO_DOCUMENTATION} ]
@@ -122,28 +174,30 @@ PREFIX=${PREFIX:-${DEFAULT_PREFIX}}
 
 # Versions of the packages to install.
 # The version regex says what existing installed versions are ok.
-PARSEC_VER="3.1.5";    PARSEC_VER_REGEXP="[23]\."
+PARSEC_VER="3.1.6";    PARSEC_VER_REGEXP="[23]\."
                        # == 2.* || == 3.*
 DEEPSEQ_VER="1.3.0.2"; DEEPSEQ_VER_REGEXP="1\.[1-9]\."
                        # >= 1.1 && < 2
-TEXT_VER="1.1.0.1";    TEXT_VER_REGEXP="((1\.[01]\.)|(0\.([2-9]|(1[0-1]))\.))"
-                       # >= 0.2 && < 1.2
-NETWORK_VER="2.5.0.0"; NETWORK_VER_REGEXP="2\.[0-5]\."
-                       # >= 2.0 && < 2.6
-CABAL_VER="1.21.0.0";  CABAL_VER_REGEXP="1\.21\."
-                       # >= 1.21 && < 1.22
+TEXT_VER="1.2.0.0";    TEXT_VER_REGEXP="((1\.[012]\.)|(0\.([2-9]|(1[0-1]))\.))"
+                       # >= 0.2 && < 1.3
+NETWORK_VER="2.6.0.2"; NETWORK_VER_REGEXP="2\.[0-6]\."
+                       # >= 2.0 && < 2.7
+NETWORK_URI_VER="2.6.0.1"; NETWORK_URI_VER_REGEXP="2\.[0-6]\."
+                       # >= 2.0 && < 2.7
+CABAL_VER="1.21.1.0";  CABAL_VER_REGEXP="1\.21\.1"
+                       # >= 1.21.1 && < 1.22
 TRANS_VER="0.3.0.0";   TRANS_VER_REGEXP="0\.[23]\."
                        # >= 0.2.* && < 0.4.*
 MTL_VER="2.1.3.1";     MTL_VER_REGEXP="[2]\."
                        #  == 2.*
-HTTP_VER="4000.2.13";  HTTP_VER_REGEXP="4000\.2\.([5-9]|1[0-9]|2[0-9])"
+HTTP_VER="4000.2.18";  HTTP_VER_REGEXP="4000\.2\.([5-9]|1[0-9]|2[0-9])"
                        # >= 4000.2.5 < 4000.3
 ZLIB_VER="0.5.4.1";    ZLIB_VER_REGEXP="0\.[45]\."
                        # == 0.4.* || == 0.5.*
 TIME_VER="1.4.2"       TIME_VER_REGEXP="1\.[1234]\.?"
                        # >= 1.1 && < 1.5
-RANDOM_VER="1.0.1.1"   RANDOM_VER_REGEXP="1\.0\."
-                       # >= 1 && < 1.1
+RANDOM_VER="1.1"       RANDOM_VER_REGEXP="1\.[01]\.?"
+                       # >= 1 && < 1.2
 STM_VER="2.4.3";       STM_VER_REGEXP="2\."
                        # == 2.*
 
@@ -174,7 +228,12 @@ info_pkg () {
 
   if need_pkg ${PKG} ${VER_MATCH}
   then
-    echo "${PKG}-${VER} will be downloaded and installed."
+    if [ -r "${PKG}-${VER}.tar.gz" ]
+    then
+        echo "${PKG}-${VER} will be installed from local tarball."
+    else
+        echo "${PKG}-${VER} will be downloaded and installed."
+    fi
   else
     echo "${PKG} is already installed and the version is ok."
   fi
@@ -239,7 +298,7 @@ install_pkg () {
       die "Documenting the ${PKG} package failed."
   fi
 
-  ./Setup install ${SCOPE_OF_INSTALLATION} ${EXTRA_INSTALL_OPTS} ${VERBOSE} ||
+  ./Setup install ${EXTRA_INSTALL_OPTS} ${VERBOSE} ||
      die "Installing the ${PKG} package failed."
 }
 
@@ -251,8 +310,13 @@ do_pkg () {
   if need_pkg ${PKG} ${VER_MATCH}
   then
     echo
-    echo "Downloading ${PKG}-${VER}..."
-    fetch_pkg ${PKG} ${VER}
+    if [ -r "${PKG}-${VER}.tar.gz" ]
+    then
+        echo "Using local tarball for ${PKG}-${VER}."
+    else
+        echo "Downloading ${PKG}-${VER}..."
+        fetch_pkg ${PKG} ${VER}
+    fi
     unpack_pkg ${PKG} ${VER}
     cd "${PKG}-${VER}"
     install_pkg ${PKG} ${VER}
@@ -270,6 +334,7 @@ info_pkg "mtl"          ${MTL_VER}     ${MTL_VER_REGEXP}
 info_pkg "text"         ${TEXT_VER}    ${TEXT_VER_REGEXP}
 info_pkg "parsec"       ${PARSEC_VER}  ${PARSEC_VER_REGEXP}
 info_pkg "network"      ${NETWORK_VER} ${NETWORK_VER_REGEXP}
+info_pkg "network-uri"  ${NETWORK_URI_VER} ${NETWORK_URI_VER_REGEXP}
 info_pkg "HTTP"         ${HTTP_VER}    ${HTTP_VER_REGEXP}
 info_pkg "zlib"         ${ZLIB_VER}    ${ZLIB_VER_REGEXP}
 info_pkg "random"       ${RANDOM_VER}  ${RANDOM_VER_REGEXP}
@@ -283,12 +348,19 @@ do_pkg   "mtl"          ${MTL_VER}     ${MTL_VER_REGEXP}
 do_pkg   "text"         ${TEXT_VER}    ${TEXT_VER_REGEXP}
 do_pkg   "parsec"       ${PARSEC_VER}  ${PARSEC_VER_REGEXP}
 do_pkg   "network"      ${NETWORK_VER} ${NETWORK_VER_REGEXP}
+do_pkg   "network-uri"  ${NETWORK_URI_VER} ${NETWORK_URI_VER_REGEXP}
 do_pkg   "HTTP"         ${HTTP_VER}    ${HTTP_VER_REGEXP}
 do_pkg   "zlib"         ${ZLIB_VER}    ${ZLIB_VER_REGEXP}
 do_pkg   "random"       ${RANDOM_VER}  ${RANDOM_VER_REGEXP}
 do_pkg   "stm"          ${STM_VER}     ${STM_VER_REGEXP}
 
 install_pkg "cabal-install"
+
+# Use the newly built cabal to turn the prefix/package database into a
+# legit cabal sandbox. This works because 'cabal sandbox init' will
+# reuse the already existing package database and other files if they
+# are in the expected locations.
+[ ! -z "$SANDBOX" ] && $SANDBOX/bin/cabal sandbox init --sandbox $SANDBOX
 
 echo
 echo "==========================================="

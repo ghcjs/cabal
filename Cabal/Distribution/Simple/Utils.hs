@@ -24,7 +24,7 @@ module Distribution.Simple.Utils (
         topHandler, topHandlerWith,
         warn, notice, setupMessage, info, debug,
         debugNoWrap, chattyTry,
-        printRawCommandAndArgs,
+        printRawCommandAndArgs, printRawCommandAndArgsAndEnv,
 
         -- * running programs
         rawSystemExit,
@@ -111,11 +111,17 @@ module Distribution.Simple.Utils (
         normaliseLineEndings,
 
         -- * generic utils
+        dropWhileEndLE,
+        takeWhileEndLE,
         equating,
         comparing,
         isInfixOf,
         intercalate,
         lowercase,
+        listUnion,
+        listUnionRight,
+        ordNub,
+        ordNubRight,
         wrapText,
         wrapLine,
   ) where
@@ -127,11 +133,12 @@ import Control.Concurrent.MVar
 import Data.List
   ( nub, unfoldr, isPrefixOf, tails, intercalate )
 import Data.Char as Char
-    ( toLower, chr, ord )
+    ( isDigit, toLower, chr, ord )
 import Data.Bits
     ( Bits((.|.), (.&.), shiftL, shiftR) )
 import qualified Data.ByteString.Lazy as BS
 import qualified Data.ByteString.Lazy.Char8 as BS.Char8
+import qualified Data.Set as Set
 
 import System.Directory
     ( Permissions(executable), getDirectoryContents, getPermissions
@@ -230,8 +237,8 @@ topHandlerWith cont prog = catchIO prog handle
                          Nothing   -> ""
                          Just path -> path ++ location ++ ": "
         location     = case ioeGetLocation ioe of
-                         l@(n:_) | n >= '0' && n <= '9' -> ':' : l
-                         _                              -> ""
+                         l@(n:_) | Char.isDigit n -> ':' : l
+                         _                        -> ""
         detail       = ioeGetErrorString ioe
 
 topHandler :: IO a -> IO a
@@ -335,20 +342,19 @@ maybeExit cmd = do
   unless (res == ExitSuccess) $ exitWith res
 
 printRawCommandAndArgs :: Verbosity -> FilePath -> [String] -> IO ()
-printRawCommandAndArgs verbosity path args
- | verbosity >= deafening = print (path, args)
- | verbosity >= verbose   = putStrLn $ showCommandForUser path args
- | otherwise              = return ()
+printRawCommandAndArgs verbosity path args =
+    printRawCommandAndArgsAndEnv verbosity path args Nothing
 
 printRawCommandAndArgsAndEnv :: Verbosity
                              -> FilePath
                              -> [String]
-                             -> [(String, String)]
+                             -> Maybe [(String, String)]
                              -> IO ()
-printRawCommandAndArgsAndEnv verbosity path args env
- | verbosity >= deafening = do putStrLn ("Environment: " ++ show env)
-                               print (path, args)
- | verbosity >= verbose   = putStrLn $ unwords (path : args)
+printRawCommandAndArgsAndEnv verbosity path args menv
+ | verbosity >= deafening = do
+       maybe (return ()) (putStrLn . ("Environment: " ++) . show) menv
+       print (path, args)
+ | verbosity >= verbose   = putStrLn $ showCommandForUser path args
  | otherwise              = return ()
 
 -- Exit with the same exit code if the subcommand fails
@@ -376,7 +382,7 @@ rawSystemExitWithEnv :: Verbosity
                      -> [(String, String)]
                      -> IO ()
 rawSystemExitWithEnv verbosity path args env = do
-    printRawCommandAndArgsAndEnv verbosity path args env
+    printRawCommandAndArgsAndEnv verbosity path args (Just env)
     hFlush stdout
     (_,_,_,ph) <- createProcess $
                   (Process.proc path args) { Process.env = (Just env)
@@ -404,8 +410,7 @@ rawSystemIOWithEnv :: Verbosity
                    -> Maybe Handle  -- ^ stderr
                    -> IO ExitCode
 rawSystemIOWithEnv verbosity path args mcwd menv inp out err = do
-    maybe (printRawCommandAndArgs       verbosity path args)
-          (printRawCommandAndArgsAndEnv verbosity path args) menv
+    printRawCommandAndArgsAndEnv verbosity path args menv
     hFlush stdout
     (_,_,_,ph) <- createProcess $
                   (Process.proc path args) { Process.cwd           = mcwd
@@ -1019,7 +1024,7 @@ withFileContents name action =
 
 -- | Writes a file atomically.
 --
--- The file is either written sucessfully or an IO exception is raised and
+-- The file is either written successfully or an IO exception is raised and
 -- the original file is left unchanged.
 --
 -- On windows it is not possible to delete a file that is open by a process.
@@ -1232,6 +1237,84 @@ normaliseLineEndings (  c :s)      =   c  : normaliseLineEndings s
 -- ------------------------------------------------------------
 -- * Common utils
 -- ------------------------------------------------------------
+
+-- | @dropWhileEndLE p@ is equivalent to @reverse . dropWhile p . reverse@, but
+-- quite a bit faster. The difference between "Data.List.dropWhileEnd" and this
+-- version is that the one in "Data.List" is strict in elements, but spine-lazy,
+-- while this one is spine-strict but lazy in elements. That's what @LE@ stands
+-- for - "lazy in elements".
+--
+-- Example:
+--
+-- @
+-- > tail $ Data.List.dropWhileEnd (<3) [undefined, 5, 4, 3, 2, 1]
+-- *** Exception: Prelude.undefined
+-- > tail $ dropWhileEndLE (<3) [undefined, 5, 4, 3, 2, 1]
+-- [5,4,3]
+-- > take 3 $ Data.List.dropWhileEnd (<3) [5, 4, 3, 2, 1, undefined]
+-- [5,4,3]
+-- > take 3 $ dropWhileEndLE (<3) [5, 4, 3, 2, 1, undefined]
+-- *** Exception: Prelude.undefined
+-- @
+dropWhileEndLE :: (a -> Bool) -> [a] -> [a]
+dropWhileEndLE p = foldr (\x r -> if null r && p x then [] else x:r) []
+
+-- | @takeWhileEndLE p@ is equivalent to @reverse . takeWhile p . reverse@, but
+-- is usually faster (as well as being easier to read).
+takeWhileEndLE :: (a -> Bool) -> [a] -> [a]
+takeWhileEndLE p = fst . foldr go ([], False)
+  where
+    go x (rest, done)
+      | not done && p x = (x:rest, False)
+      | otherwise = (rest, True)
+
+-- | Like "Data.List.nub", but has @O(n log n)@ complexity instead of
+-- @O(n^2)@. Code for 'ordNub' and 'listUnion' taken from Niklas Hambüchen's
+-- <http://github.com/nh2/haskell-ordnub ordnub> package.
+ordNub :: (Ord a) => [a] -> [a]
+ordNub l = go Set.empty l
+  where
+    go _ [] = []
+    go s (x:xs) = if x `Set.member` s then go s xs
+                                      else x : go (Set.insert x s) xs
+
+-- | Like "Data.List.union", but has @O(n log n)@ complexity instead of
+-- @O(n^2)@.
+listUnion :: (Ord a) => [a] -> [a] -> [a]
+listUnion a b = a ++ ordNub (filter (`Set.notMember` aSet) b)
+  where
+    aSet = Set.fromList a
+
+-- | A right-biased version of 'ordNub'.
+--
+-- Example:
+--
+-- @
+-- > ordNub [1,2,1]
+-- [1,2]
+-- > ordNubRight [1,2,1]
+-- [2,1]
+-- @
+ordNubRight :: (Ord a) => [a] -> [a]
+ordNubRight = fst . foldr go ([], Set.empty)
+  where
+    go x p@(l, s) = if x `Set.member` s then p
+                                        else (x:l, Set.insert x s)
+
+-- | A right-biased version of 'listUnion'.
+--
+-- Example:
+--
+-- @
+-- > listUnion [1,2,3,4,3] [2,1,1]
+-- [1,2,3,4,3]
+-- > listUnionRight [1,2,3,4,3] [2,1,1]
+-- [4,3,2,1,1]
+-- @
+listUnionRight :: (Ord a) => [a] -> [a] -> [a]
+listUnionRight a b = ordNubRight (filter (`Set.notMember` bSet) a) ++ b
+  where
+    bSet = Set.fromList b
 
 equating :: Eq a => (b -> a) -> b -> b -> Bool
 equating p x y = p x == p y

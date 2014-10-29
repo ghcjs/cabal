@@ -9,12 +9,12 @@
 --
 
 module Distribution.Simple.GHC.IPI641 (
-    InstalledPackageInfo,
+    InstalledPackageInfo(..),
     toCurrent,
   ) where
 
 import qualified Distribution.InstalledPackageInfo as Current
-import qualified Distribution.Package as Current hiding (depends)
+import qualified Distribution.Package as Current hiding (depends, installedPackageId)
 import Distribution.Text (display)
 
 import Distribution.Simple.GHC.IPI642
@@ -94,7 +94,6 @@ toCurrent ipi@InstalledPackageInfo{} =
     Current.includeDirs        = includeDirs ipi,
     Current.includes           = includes ipi,
     Current.depends            = map (mkInstalledPackageId.convertPackageId) (depends ipi),
-    Current.hugsOptions        = hugsOptions ipi,
     Current.ccOptions          = ccOptions ipi,
     Current.ldOptions          = ldOptions ipi,
     Current.frameworkDirs      = frameworkDirs ipi,
