@@ -7,17 +7,12 @@ import Distribution.Compat.CreatePipe ( createPipe )
 import Distribution.Compat.Environment ( getEnvironment )
 import qualified Distribution.PackageDescription as PD
 import Distribution.Simple.Build.PathsModule ( pkgPathEnvVar )
-import Distribution.Simple.BuildPaths ( exeExtension )
-import Distribution.Simple.Compiler ( Compiler(..) )
 import Distribution.Simple.Hpc ( markupTest, tixDir, tixFilePath )
-import Distribution.Simple.InstallDirs
-    ( fromPathTemplate, initialPathTemplateEnv, PathTemplateVariable(..)
-    , substPathTemplate , toPathTemplate, PathTemplate )
 import qualified Distribution.Simple.LocalBuildInfo as LBI
 import Distribution.Simple.Setup
     ( TestFlags(..), TestShowDetails(..), fromFlag, configCoverage )
 import Distribution.Simple.Test.Log
-import Distribution.Simple.Utils ( die, notice, rawSystemIOWithEnv )
+import Distribution.Simple.Utils ( notice, rawSystemIOWithEnv )
 import Distribution.TestSuite
 import Distribution.Text
 import Distribution.Verbosity ( normal )
@@ -25,10 +20,10 @@ import Distribution.Verbosity ( normal )
 import Control.Concurrent (forkIO)
 import Control.Monad ( unless, void, when )
 import System.Directory
-    ( createDirectoryIfMissing, doesDirectoryExist, doesFileExist
+    ( createDirectoryIfMissing, doesDirectoryExist
     , getCurrentDirectory, removeDirectoryRecursive )
 import System.Exit ( ExitCode(..) )
-import System.FilePath ( (</>), (<.>) )
+import System.FilePath ( (</>) )
 import System.IO ( hGetContents, hPutStr, stdout )
 
 runTest :: PD.PackageDescription

@@ -571,6 +571,7 @@ platformDefines lbi =
       Rs6000      -> ["rs6000"]
       M68k        -> ["m68k"]
       Vax         -> ["vax"]
+      JavaScript  -> ["javascript"]
       OtherArch _ -> []
 
 ppHappy :: BuildInfo -> LocalBuildInfo -> PreProcessor

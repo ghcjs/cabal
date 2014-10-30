@@ -46,7 +46,6 @@ module Distribution.Simple.GHC.Internal (
         getExtensions,
         targetPlatform,
         getGhcInfo,
-        getExtensions,
         componentCcGhcOptions,
         componentGhcOptions,
         mkGHCiLibName,
@@ -58,22 +57,19 @@ module Distribution.Simple.GHC.Internal (
 
 import Distribution.Simple.GHC.Props ( ImplProps (..) )
 import Distribution.Package
-         ( PackageName(..), InstalledPackageId, PackageId )
+         ( InstalledPackageId, PackageId )
 import Distribution.PackageDescription as PD
-         ( PackageDescription(..), BuildInfo(..), Executable(..)
-         , Library(..), libModules, exeModules
-         , hcOptions, hcProfOptions, hcSharedOptions
-         , usedExtensions, allExtensions )
+         ( BuildInfo(..)
+         , Library(..), libModules
+         , hcOptions
+         , usedExtensions )
 import Distribution.PackageDescription ( ModuleRenaming, lookupRenaming )
 import Distribution.Compat.Exception ( catchExit, catchIO )
 import Distribution.Simple.Compiler
-         ( CompilerFlavor(..), CompilerId(..), Compiler(..), compilerVersion
-         , OptimisationLevel(..), PackageDB(..), PackageDBStack )
+         ( CompilerFlavor(..), Compiler(..), OptimisationLevel(..) )
 import Distribution.Simple.Program.GHC
 import Distribution.Simple.Setup
-         ( toFlag, fromFlag, fromFlagOrDefault )
-import qualified Distribution.Simple.Setup as Cabal
-         ( Flag )
+         ( toFlag )
 import qualified Distribution.ModuleName as ModuleName
 import Distribution.Simple.Program
          ( Program(..), ConfiguredProgram(..), ProgramConfiguration
@@ -84,27 +80,23 @@ import Distribution.Simple.Program
 import Distribution.Simple.Program.Types ( suppressOverrideArgs )
 import Distribution.Simple.LocalBuildInfo
          ( LocalBuildInfo(..), ComponentLocalBuildInfo(..)
-         , LibraryName(..), absoluteInstallDirs )
+         , LibraryName(..) )
 import Distribution.Simple.Utils
 import Distribution.Simple.BuildPaths
 import Distribution.System ( buildOS, OS(..), Platform, platformFromTriple )
 import Distribution.Text ( display, simpleParse )
 import Distribution.Utils.NubList ( toNubListR )
 import Distribution.Verbosity
-import Distribution.Version ( Version(..) )
 import Language.Haskell.Extension
          ( Language(..), Extension(..), KnownExtension(..) )
+
 import qualified Data.Map as M
-import Data.Char ( isSpace )
-import Data.List
-import Data.Maybe               ( catMaybes, fromMaybe, maybeToList )
+import Data.Char                ( isSpace )
+import Data.Maybe               ( fromMaybe, maybeToList )
 import Data.Monoid              ( Monoid(..) )
-import System.Directory
-         ( getDirectoryContents, doesFileExist, getTemporaryDirectory )
-import System.FilePath          ( (</>), (<.>), takeExtension,
-                                  takeDirectory, replaceExtension,
-                                  splitExtension )
-import System.IO ( hClose, hPutStrLn )
+import System.Directory         ( getDirectoryContents, getTemporaryDirectory )
+import System.FilePath          ( (</>), (<.>), takeExtension, takeDirectory )
+import System.IO                ( hClose, hPutStrLn )
 
 targetPlatform :: [(String, String)] -> Maybe Platform
 targetPlatform ghcInfo = platformFromTriple =<< lookup "Target platform" ghcInfo
@@ -300,9 +292,6 @@ getExtensions verbosity props ghcProg
     return extensions2
 
   | otherwise = return oldLanguageExtensions
-
-  where
-    Just ghcVersion = programVersion ghcProg
 
 -- | For GHC 6.6.x and earlier, the mapping from supported extensions to flags
 oldLanguageExtensions :: [(Extension, String)]

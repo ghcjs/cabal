@@ -47,7 +47,8 @@ module Distribution.Simple.GHC (
         ghcGlobalPackageDB
  ) where
 
-import Distribution.Simple.GHC.Props ( getImplProps, ghcVersionImplProps )
+import Distribution.Simple.GHC.Props
+         ( getImplProps, ghcVersionImplProps )
 import qualified Distribution.Simple.GHC.Internal as Internal
 import qualified Distribution.Simple.GHC.IPI641 as IPI641
 import qualified Distribution.Simple.GHC.IPI642 as IPI642
@@ -55,7 +56,7 @@ import Distribution.PackageDescription as PD
          ( PackageDescription(..), BuildInfo(..), Executable(..)
          , Library(..), libModules, exeModules
          , hcOptions, hcProfOptions, hcSharedOptions
-         , usedExtensions, allExtensions )
+         , allExtensions )
 import Distribution.InstalledPackageInfo
          ( InstalledPackageInfo )
 import qualified Distribution.InstalledPackageInfo as InstalledPackageInfo
@@ -64,25 +65,21 @@ import Distribution.Simple.PackageIndex (InstalledPackageIndex)
 import qualified Distribution.Simple.PackageIndex as PackageIndex
 import Distribution.Simple.LocalBuildInfo
          ( LocalBuildInfo(..), ComponentLocalBuildInfo(..)
-         , LibraryName(..), absoluteInstallDirs )
+         , absoluteInstallDirs )
 import qualified Distribution.Simple.Hpc as Hpc
 import Distribution.Simple.InstallDirs hiding ( absoluteInstallDirs )
 import Distribution.Simple.BuildPaths
 import Distribution.Simple.Utils
 import Distribution.Package
-         ( PackageName(..), InstalledPackageId, PackageId )
+         ( PackageName(..) )
 import qualified Distribution.ModuleName as ModuleName
 import Distribution.Simple.Program
          ( Program(..), ConfiguredProgram(..), ProgramConfiguration
          , ProgramSearchPath
-         , rawSystemProgram
          , rawSystemProgramStdout, rawSystemProgramStdoutConf
-         , getProgramInvocationOutput, suppressOverrideArgs
-         , requireProgramVersion, requireProgram
+         , getProgramInvocationOutput, requireProgramVersion, requireProgram
          , userMaybeSpecifyPath, programPath, lookupProgram, addKnownProgram
-         , ghcProgram, ghcPkgProgram, hsc2hsProgram
-         , arProgram, ldProgram
-         , gccProgram, stripProgram )
+         , ghcProgram, ghcPkgProgram, hsc2hsProgram, ldProgram )
 import qualified Distribution.Simple.Program.HcPkg as HcPkg
 import qualified Distribution.Simple.Program.Ar    as Ar
 import qualified Distribution.Simple.Program.Ld    as Ld
@@ -94,32 +91,31 @@ import qualified Distribution.Simple.Setup as Cabal
         ( Flag )
 import Distribution.Simple.Compiler
          ( CompilerFlavor(..), CompilerId(..), Compiler(..), compilerVersion
-         , OptimisationLevel(..), PackageDB(..), PackageDBStack )
+         , PackageDB(..), PackageDBStack )
 import Distribution.Version
          ( Version(..), anyVersion, orLaterVersion )
 import Distribution.System
-         ( Platform(..), OS(..), buildOS, platformFromTriple )
+         ( Platform(..), OS(..) )
 import Distribution.Verbosity
-import Distribution.Text
-         ( display, simpleParse )
+import Distribution.Text ( display )
 import Distribution.Utils.NubList
          ( overNubListR, toNubListR )
-import Language.Haskell.Extension (Language(..), Extension(..)
+import Language.Haskell.Extension (Extension(..)
                                   ,KnownExtension(..))
 
 import Control.Monad            ( unless, when )
 import Data.Char                ( isDigit, isSpace )
 import Data.List
-import qualified Data.Map as M  ( Map, fromList, lookup )
-import Data.Maybe               ( catMaybes, fromMaybe, maybeToList )
+import qualified Data.Map as M  ( fromList )
+import Data.Maybe               ( catMaybes, fromMaybe )
 import Data.Monoid              ( Monoid(..) )
-import System.Directory
-         ( getDirectoryContents, doesFileExist, getTemporaryDirectory )
+import System.Directory         ( doesFileExist )
+import System.Environment       ( getEnv )
 import System.FilePath          ( (</>), (<.>), takeExtension,
                                   takeDirectory, replaceExtension,
                                   splitExtension )
-import System.Environment (getEnv)
-import Distribution.Compat.Exception (catchExit, catchIO)
+
+import Distribution.Compat.Exception ( catchIO )
 
 -- -----------------------------------------------------------------------------
 -- Configuring

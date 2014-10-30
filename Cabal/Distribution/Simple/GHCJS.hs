@@ -17,40 +17,34 @@ module Distribution.Simple.GHCJS (
 
 import Distribution.Simple.GHC.Props ( getImplProps, ghcjsVersionImplProps )
 import qualified Distribution.Simple.GHC.Internal as Internal
-import qualified Distribution.Simple.GHC.IPI641 as IPI641
-import qualified Distribution.Simple.GHC.IPI642 as IPI642
 import Distribution.PackageDescription as PD
          ( PackageDescription(..), BuildInfo(..), Executable(..)
          , Library(..), libModules, exeModules
          , hcOptions, hcProfOptions, hcSharedOptions
-         , usedExtensions, allExtensions )
+         , allExtensions )
 import Distribution.InstalledPackageInfo
          ( InstalledPackageInfo )
 import qualified Distribution.InstalledPackageInfo as InstalledPackageInfo
                                 ( InstalledPackageInfo_(..) )
-import Distribution.Simple.PackageIndex (PackageIndex, InstalledPackageIndex)
+import Distribution.Simple.PackageIndex ( InstalledPackageIndex )
 import qualified Distribution.Simple.PackageIndex as PackageIndex
 import Distribution.Simple.LocalBuildInfo
          ( LocalBuildInfo(..), ComponentLocalBuildInfo(..)
-         , LibraryName(..), absoluteInstallDirs )
+         , absoluteInstallDirs )
 import Distribution.Simple.InstallDirs hiding ( absoluteInstallDirs )
 import Distribution.Simple.BuildPaths
 import Distribution.Simple.Utils
-import Distribution.Package
-         ( PackageName(..) )
-import qualified Distribution.ModuleName as ModuleName
 import Distribution.Simple.Program
          ( Program(..), ConfiguredProgram(..), ProgramConfiguration
          , ProgramSearchPath
-         , rawSystemProgram, rawSystemProgramConf
+         , rawSystemProgramConf
          , rawSystemProgramStdout, rawSystemProgramStdoutConf
-         , getProgramInvocationOutput, suppressOverrideArgs
+         , getProgramInvocationOutput
          , requireProgramVersion, requireProgram
          , userMaybeSpecifyPath, programPath
-         , lookupProgram, addKnownProgram, addKnownPrograms
+         , lookupProgram, addKnownPrograms
          , ghcjsProgram, ghcjsPkgProgram, c2hsProgram, hsc2hsProgram
-         , arProgram, ldProgram, haddockProgram
-         , gccProgram, stripProgram )
+         , ldProgram, haddockProgram, stripProgram )
 import qualified Distribution.Simple.Program.HcPkg as HcPkg
 import qualified Distribution.Simple.Program.Ar    as Ar
 import qualified Distribution.Simple.Program.Ld    as Ld
@@ -61,33 +55,31 @@ import Distribution.Simple.Setup
 import qualified Distribution.Simple.Setup as Cabal
         ( Flag )
 import Distribution.Simple.Compiler
-         ( CompilerFlavor(..), CompilerId(..), Compiler(..), compilerVersion
-         , OptimisationLevel(..), PackageDB(..), PackageDBStack )
+         ( CompilerFlavor(..), CompilerId(..), Compiler(..)
+         , PackageDB(..), PackageDBStack )
 import Distribution.Version
          ( Version(..), anyVersion, orLaterVersion )
 import Distribution.System
-         ( Platform(..), OS(..), buildOS, platformFromTriple )
+         ( Platform(..) )
 import Distribution.Verbosity
 import Distribution.Utils.NubList
-         ( NubListR, overNubListR, toNubListR )
+         ( overNubListR, toNubListR )
 import Distribution.Text ( display )
-import Language.Haskell.Extension (Language(..), Extension(..)
-                                  ,KnownExtension(..))
+import Language.Haskell.Extension ( Extension(..)
+                                  , KnownExtension(..))
 
 import Control.Monad            ( unless, when )
 import Data.Char                ( isSpace )
-import Data.List
-import qualified Data.Map as M  ( Map, fromList, lookup )
-import Data.Maybe               ( catMaybes, fromMaybe, maybeToList )
+import qualified Data.Map as M  ( fromList  )
+import Data.Maybe               ( fromMaybe )
 import Data.Monoid              ( Monoid(..) )
 import System.Directory
-         ( getDirectoryContents, doesFileExist, doesDirectoryExist
-         , getTemporaryDirectory )
+         ( doesFileExist, doesDirectoryExist )
 import System.FilePath          ( (</>), (<.>), takeExtension,
                                   takeDirectory, replaceExtension,
                                   splitExtension )
-import System.Environment (getEnv)
-import Distribution.Compat.Exception (catchExit, catchIO)
+-- import System.Environment (getEnv)
+-- import Distribution.Compat.Exception (catchExit, catchIO)
 
 configure :: Verbosity -> Maybe FilePath -> Maybe FilePath
           -> ProgramConfiguration
@@ -347,9 +339,8 @@ buildOrReplLib forRepl verbosity numJobsFlag pkg_descr lbi lib clbi = do
       ifReplLib = when forRepl
       comp = compiler lbi
       props = getImplProps comp
-      ghcjsVersion = compilerVersion comp
       nativeToo = ghcjsNativeToo comp
-      (Platform _hostArch hostOS) = hostPlatform lbi
+      -- (Platform _hostArch _hostOS) = hostPlatform lbi
   (ghcjsProg, _) <- requireProgram verbosity ghcjsProgram (withPrograms lbi)
   let runGhcjsProg        = runGHC verbosity ghcjsProg comp
       libBi               = libBuildInfo lib
@@ -468,6 +459,7 @@ buildOrReplLib forRepl verbosity numJobsFlag pkg_descr lbi lib clbi = do
         profileLibFilePath = libTargetDir </> mkProfLibName        libName
         sharedLibFilePath  = libTargetDir </> mkSharedLibName cid  libName
         ghciLibFilePath    = libTargetDir </> Internal.mkGHCiLibName libName
+        -- fixme why is this not used
         libInstallPath = libdir $ absoluteInstallDirs pkg_descr lbi NoCopyDest
         sharedLibInstallPath = libInstallPath </> mkSharedLibName cid libName
 
@@ -791,7 +783,7 @@ libAbiHash verbosity _pkg_descr lbi lib clbi = do
   let
       libBi       = libBuildInfo lib
       comp        = compiler lbi
-      props       = ghcjsVersionImplProps (compilerVersion comp)
+      -- props       = ghcjsVersionImplProps (compilerVersion comp)
       vanillaArgs =
         (componentGhcOptions verbosity lbi libBi clbi (buildDir lbi))
         `mappend` mempty {

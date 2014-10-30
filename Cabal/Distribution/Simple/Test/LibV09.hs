@@ -13,17 +13,12 @@ import Distribution.Compat.TempFile ( openTempFile )
 import Distribution.ModuleName ( ModuleName )
 import qualified Distribution.PackageDescription as PD
 import Distribution.Simple.Build.PathsModule ( pkgPathEnvVar )
-import Distribution.Simple.BuildPaths ( exeExtension )
-import Distribution.Simple.Compiler ( Compiler(..) )
 import Distribution.Simple.Hpc ( markupTest, tixDir, tixFilePath )
-import Distribution.Simple.InstallDirs
-    ( fromPathTemplate, initialPathTemplateEnv, PathTemplateVariable(..)
-    , substPathTemplate , toPathTemplate, PathTemplate )
 import qualified Distribution.Simple.LocalBuildInfo as LBI
 import Distribution.Simple.Setup
     ( TestFlags(..), TestShowDetails(..), fromFlag, configCoverage )
 import Distribution.Simple.Test.Log
-import Distribution.Simple.Utils ( die, notice, rawSystemIOWithEnv )
+import Distribution.Simple.Utils ( notice, rawSystemIOWithEnv )
 import Distribution.TestSuite
 import Distribution.Text
 import Distribution.Verbosity ( normal )

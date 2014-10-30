@@ -112,7 +112,7 @@ ghcVersionImplProps (Version v _) = ImplProps
   }
 
 ghcjsVersionImplProps :: Version -> Version -> ImplProps
-ghcjsVersionImplProps ghcjsVer ghcVer = ImplProps
+ghcjsVersionImplProps _ghcjsVer _ghcVer = ImplProps
   { hasCcOdirBug         = False
   , flagInfoLanguages    = True
   , fakeRecordPuns       = False

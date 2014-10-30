@@ -47,8 +47,6 @@ import Distribution.Simple.Program.Types
 import Distribution.Simple.Program.Run
          ( ProgramInvocation(..), IOEncoding(..), programInvocation
          , runProgramInvocation, getProgramInvocationOutput )
-import Distribution.Version
-         ( Version(..) )
 import Distribution.Text
          ( display, simpleParse )
 import Distribution.Simple.Utils

@@ -41,7 +41,7 @@ import Distribution.PackageDescription.Utils
 import Distribution.Version
          ( VersionRange, anyVersion, intersectVersionRanges, withinRange )
 import Distribution.Compiler
-         ( CompilerId(CompilerId), CompilerFlavor(..) )
+         ( CompilerId(CompilerId) )
 import Distribution.System
          ( Platform(..), OS, Arch )
 import Distribution.Simple.Utils

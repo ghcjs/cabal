@@ -19,7 +19,6 @@ import Distribution.Simple.Test.Utils ( testSuiteCmd )
 import qualified Distribution.PackageDescription as PD
     ( PackageDescription(..), BuildInfo(buildable)
     , Benchmark(..), BenchmarkInterface(..), benchmarkType, hasBenchmarks )
-import Distribution.Simple.BuildPaths ( exeExtension )
 import Distribution.Simple.Compiler ( Compiler(..) )
 import Distribution.Simple.InstallDirs
     ( fromPathTemplate, initialPathTemplateEnv, PathTemplateVariable(..)
@@ -33,8 +32,6 @@ import Distribution.Text
 
 import Control.Monad ( when, unless )
 import System.Exit ( ExitCode(..), exitFailure, exitWith )
-import System.Directory ( doesFileExist )
-import System.FilePath ( (</>), (<.>) )
 
 -- | Perform the \"@.\/setup bench@\" action.
 bench :: Args                    -- ^positional command-line arguments

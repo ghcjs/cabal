@@ -22,8 +22,7 @@ import Distribution.Simple.Program.Types
 import Distribution.Simple.Program.Run
 import Distribution.Text
 import Distribution.Verbosity
-import Distribution.Utils.NubList (NubListR, fromNubListR)
-import Distribution.Version
+import Distribution.Utils.NubList   ( NubListR, fromNubListR )
 import Language.Haskell.Extension   ( Language(..), Extension(..) )
 
 import qualified Data.Map as M

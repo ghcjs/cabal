@@ -36,7 +36,7 @@ import Distribution.PackageDescription as PD
          , TestSuite(..), TestSuiteInterface(..)
          , Benchmark(..), BenchmarkInterface(..) )
 import Distribution.Simple.Compiler
-         ( CompilerFlavor(..), Compiler(..), compilerVersion
+         ( CompilerFlavor(..), Compiler(..)
          , compilerFlavor, compilerFlavorVersion )
 import Distribution.Simple.Program.GHC
          ( GhcOptions(..), GhcDynLinkMode(..), renderGhcOptions )

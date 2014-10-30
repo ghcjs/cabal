@@ -7,18 +7,16 @@ import qualified Distribution.Simple.GHCJS as GHCJS
 import qualified Distribution.Simple.LocalBuildInfo as LBI
 import qualified Distribution.PackageDescription as PD
 import Distribution.Simple.BuildPaths ( exeExtension )
-import Distribution.Simple.Compiler ( Compiler(..), CompilerFlavor(..)
-                                    , compilerFlavor )
+import Distribution.Simple.Compiler
+    ( Compiler(..), CompilerFlavor(..), compilerFlavor )
 import Distribution.Simple.InstallDirs
     ( fromPathTemplate, initialPathTemplateEnv, PathTemplateVariable(..)
     , substPathTemplate , toPathTemplate, PathTemplate )
-import Distribution.Simple.Utils ( die, notice, rawSystemIOWithEnv )
+import Distribution.Simple.Utils ( die )
 
-import Control.Monad ( unless, void, when )
+import Control.Monad ( unless )
 import System.FilePath ( (</>), (<.>) )
-import System.Directory
-    ( createDirectoryIfMissing, doesDirectoryExist, doesFileExist
-    , getCurrentDirectory, removeDirectoryRecursive )
+import System.Directory ( doesFileExist )
 
 testSuiteCmd :: LBI.LocalBuildInfo
              -> FilePath

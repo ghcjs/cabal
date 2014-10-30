@@ -174,24 +174,22 @@ import Distribution.Package
 import Distribution.ModuleName (ModuleName)
 import qualified Distribution.ModuleName as ModuleName
 import Distribution.Version
-    (Version(..))
+    ( Version(..) )
 
 import Control.Exception (IOException, evaluate, throwIO)
 import Control.Concurrent (forkIO)
-import System.Process (runInteractiveProcess, waitForProcess, proc,
-                       StdStream(..))
 import qualified System.Process as Process
-         ( CreateProcess(..), StdStream(..), proc)
+    ( CreateProcess(..), StdStream(..), proc)
 import System.Process
-         ( createProcess, rawSystem, runInteractiveProcess
-         , showCommandForUser, waitForProcess)
+    ( createProcess, rawSystem, runInteractiveProcess
+    , showCommandForUser, waitForProcess)
 import Distribution.Compat.CopyFile
-         ( copyFile, copyOrdinaryFile, copyExecutableFile
-         , setFileOrdinary, setFileExecutable, setDirOrdinary )
+    ( copyFile, copyOrdinaryFile, copyExecutableFile
+    , setFileOrdinary, setFileExecutable, setDirOrdinary )
 import Distribution.Compat.TempFile
-         ( openTempFile, createTempDirectory )
+    ( openTempFile, createTempDirectory )
 import Distribution.Compat.Exception
-         ( tryIO, catchIO, catchExit )
+    ( tryIO, catchIO, catchExit )
 import Distribution.Verbosity
 
 #ifdef VERSION_base
