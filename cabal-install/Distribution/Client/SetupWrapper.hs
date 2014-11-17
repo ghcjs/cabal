@@ -1,3 +1,4 @@
+{-# LANGUAGE CPP #-}
 -----------------------------------------------------------------------------
 -- |
 -- Module      :  Distribution.Client.SetupWrapper
@@ -53,6 +54,7 @@ import Distribution.Simple.Program.Find
          ( programSearchPathAsPATHVar )
 import Distribution.Simple.Program.Run
          ( getEffectiveEnvironment )
+import qualified Distribution.Simple.Program.Strip as Strip
 import Distribution.Simple.BuildPaths
          ( defaultDistPref, exeExtension )
 import Distribution.Simple.Command
@@ -99,6 +101,16 @@ import Data.Maybe          ( fromMaybe, isJust )
 import Data.Monoid         ( mempty )
 import Data.Char           ( isSpace )
 
+#ifdef mingw32_HOST_OS
+import Distribution.Simple.Utils
+         ( withTempDirectory )
+
+import Control.Exception   ( bracket )
+import System.FilePath     ( equalFilePath, takeDirectory )
+import System.Directory    ( doesDirectoryExist )
+import qualified System.Win32 as Win32
+#endif
+
 data SetupScriptOptions = SetupScriptOptions {
     useCabalVersion          :: VersionRange,
     useCompiler              :: Maybe Compiler,
@@ -110,6 +122,17 @@ data SetupScriptOptions = SetupScriptOptions {
     useLoggingHandle         :: Maybe Handle,
     useWorkingDir            :: Maybe FilePath,
     forceExternalSetupMethod :: Bool,
+
+    -- Used only by 'cabal clean' on Windows.
+    --
+    -- Note: win32 clean hack
+    -------------------------
+    -- On Windows, running './dist/setup/setup clean' doesn't work because the
+    -- setup script will try to delete itself (which causes it to fail horribly,
+    -- unlike on Linux). So we have to move the setup exe out of the way first
+    -- and then delete it manually. This applies only to the external setup
+    -- method.
+    useWin32CleanHack        :: Bool,
 
     -- Used only when calling setupWrapper from parallel code to serialise
     -- access to the setup cache; should be Nothing otherwise.
@@ -137,6 +160,7 @@ defaultSetupScriptOptions = SetupScriptOptions {
     useDistPref              = defaultDistPref,
     useLoggingHandle         = Nothing,
     useWorkingDir            = Nothing,
+    useWin32CleanHack        = False,
     forceExternalSetupMethod = False,
     setupCacheLock           = Nothing
   }
@@ -241,6 +265,7 @@ externalSetupMethod verbosity options pkg bt mkargs = do
   setupVersionFile = setupDir   </> "setup" <.> "version"
   setupHs          = setupDir   </> "setup" <.> "hs"
   setupProgFile    = setupDir   </> "setup" <.> exeExtension
+  platform         = fromMaybe buildPlatform (usePlatform options)
 
   useCachedSetupExecutable = (bt == Simple || bt == Configure || bt == Make)
 
@@ -385,7 +410,7 @@ externalSetupMethod verbosity options pkg bt mkargs = do
                         (useProgramConfig options') verbosity
                       return (comp, conf)
     -- Whenever we need to call configureCompiler, we also need to access the
-    -- package index, so let's cache it here.
+    -- package index, so let's cache it in SetupScriptOptions.
     index <- maybeGetInstalledPackages options' comp conf
     return (comp, conf, options' { useCompiler      = Just comp,
                                    usePackageIndex  = Just index,
@@ -411,8 +436,7 @@ externalSetupMethod verbosity options pkg bt mkargs = do
         compilerVersionString = display $
                                 fromMaybe buildCompilerId
                                 (fmap compilerId . useCompiler $ options')
-        platformString        = display $
-                                fromMaybe buildPlatform (usePlatform options')
+        platformString        = display platform
 
   -- | Look up the setup executable in the cache; update the cache if the setup
   -- executable is not found.
@@ -440,7 +464,9 @@ externalSetupMethod verbosity options pkg bt mkargs = do
           createDirectoryIfMissingVerbose verbosity True setupCacheDir
           installExecutableFile verbosity src cachedSetupProgFile
           case jsDir of
-            Nothing -> return ()
+            Nothing -> do
+              Strip.stripExe verbosity platform (useProgramConfig options')
+                cachedSetupProgFile
             Just d  -> do
               let tgt = dropExeExtension cachedSetupProgFile <.> "jsexe"
               createDirectoryIfMissingVerbose verbosity False tgt
@@ -512,12 +538,47 @@ externalSetupMethod verbosity options pkg bt mkargs = do
     -- working directory.
     path' <- tryCanonicalizePath path
 
-    searchpath <- programSearchPathAsPATHVar
-                    (getProgramSearchPath (useProgramConfig options'))
-    env        <- getEffectiveEnvironment [("PATH", Just searchpath)]
+    -- See 'Note: win32 clean hack' above.
+#if mingw32_HOST_OS
+    setupProgFile' <- tryCanonicalizePath setupProgFile
+    let win32CleanHackNeeded = (useWin32CleanHack options')
+                               -- Skip when a cached setup script is used.
+                               && setupProgFile' `equalFilePath` path'
+    if win32CleanHackNeeded then doWin32CleanHack path' else doInvoke path'
+#else
+    doInvoke path'
+#endif
 
-    process <- runProcess path' args
-                 (useWorkingDir options') env
-                 Nothing (useLoggingHandle options') (useLoggingHandle options')
-    exitCode <- waitForProcess process
-    unless (exitCode == ExitSuccess) $ exitWith exitCode
+    where
+      doInvoke path' = do
+        searchpath <- programSearchPathAsPATHVar
+                      (getProgramSearchPath (useProgramConfig options'))
+        env        <- getEffectiveEnvironment [("PATH", Just searchpath)]
+
+        process <- runProcess path' args
+                   (useWorkingDir options') env Nothing
+                   (useLoggingHandle options') (useLoggingHandle options')
+        exitCode <- waitForProcess process
+        unless (exitCode == ExitSuccess) $ exitWith exitCode
+
+#if mingw32_HOST_OS
+      doWin32CleanHack path' = do
+        info verbosity $ "Using the Win32 clean hack."
+        -- Recursively removes the temp dir on exit.
+        withTempDirectory verbosity workingDir "cabal-tmp" $ \tmpDir ->
+            bracket (moveOutOfTheWay tmpDir path')
+                    (maybeRestore path')
+                    doInvoke
+
+      moveOutOfTheWay tmpDir path' = do
+        let newPath = tmpDir </> "setup" <.> exeExtension
+        Win32.moveFile path' newPath
+        return newPath
+
+      maybeRestore oldPath path' = do
+        let oldPathDir = takeDirectory oldPath
+        oldPathDirExists <- doesDirectoryExist oldPathDir
+        -- 'setup clean' didn't complete, 'dist/setup' still exists.
+        when oldPathDirExists $
+          Win32.moveFile path' oldPath
+#endif
