@@ -51,7 +51,7 @@ import qualified Distribution.Simple.Program.Ld    as Ld
 import qualified Distribution.Simple.Program.Strip as Strip
 import Distribution.Simple.Program.GHC
 import Distribution.Simple.Setup
-         ( toFlag, fromFlag, fromFlagOrDefault )
+         ( toFlag, fromFlag )
 import qualified Distribution.Simple.Setup as Cabal
         ( Flag )
 import Distribution.Simple.Compiler
@@ -71,7 +71,6 @@ import Language.Haskell.Extension ( Extension(..)
 import Control.Monad            ( unless, when )
 import Data.Char                ( isSpace )
 import qualified Data.Map as M  ( fromList  )
-import Data.Maybe               ( fromMaybe )
 import Data.Monoid              ( Monoid(..) )
 import System.Directory
          ( doesFileExist, doesDirectoryExist )
@@ -323,13 +322,12 @@ replLib  = buildOrReplLib True
 buildOrReplLib :: Bool -> Verbosity  -> Cabal.Flag (Maybe Int)
                -> PackageDescription -> LocalBuildInfo
                -> Library            -> ComponentLocalBuildInfo -> IO ()
-buildOrReplLib forRepl verbosity numJobsFlag pkg_descr lbi lib clbi = do
+buildOrReplLib forRepl verbosity numJobs pkg_descr lbi lib clbi = do
   libName <- case componentLibraries clbi of
              [libName] -> return libName
              [] -> die "No library name found when building library"
              _  -> die "Multiple library names found when building library"
   let libTargetDir = buildDir lbi
-      numJobs = fromMaybe 1 $ fromFlagOrDefault Nothing numJobsFlag
       whenVanillaLib forceVanilla =
         when (not forRepl && (forceVanilla || withVanillaLib lbi))
       whenProfLib = when (not forRepl && withProfLib lbi)
@@ -358,7 +356,7 @@ buildOrReplLib forRepl verbosity numJobsFlag pkg_descr lbi lib clbi = do
       baseOpts    = componentGhcOptions verbosity lbi libBi clbi libTargetDir
       vanillaOpts = baseOpts `mappend` mempty {
                       ghcOptMode         = toFlag GhcModeMake,
-                      ghcOptNumJobs      = toFlag numJobs,
+                      ghcOptNumJobs      = numJobs,
                       ghcOptPackageKey   = toFlag (pkgKey lbi),
                       ghcOptInputModules = toNubListR $ libModules lib
                     }
@@ -543,14 +541,12 @@ replExe  = buildOrReplExe True
 buildOrReplExe :: Bool -> Verbosity  -> Cabal.Flag (Maybe Int)
                -> PackageDescription -> LocalBuildInfo
                -> Executable         -> ComponentLocalBuildInfo -> IO ()
-buildOrReplExe forRepl verbosity numJobsFlag _pkg_descr lbi
+buildOrReplExe forRepl verbosity numJobs _pkg_descr lbi
   exe@Executable { exeName = exeName', modulePath = modPath } clbi = do
 
   (ghcjsProg, _) <- requireProgram verbosity ghcjsProgram (withPrograms lbi)
   let comp         = compiler lbi
       props        = getImplProps comp
-      numJobs      = fromMaybe 1 $
-                     fromFlagOrDefault Nothing numJobsFlag
       runGhcjsProg = runGHC verbosity ghcjsProg comp
       exeBi        = buildInfo exe
 
@@ -657,11 +653,11 @@ buildOrReplExe forRepl verbosity numJobsFlag _pkg_descr lbi
   -- Build static/dynamic object files for TH, if needed.
   when compileForTH $
     runGhcjsProg compileTHOpts { ghcOptNoLink  = toFlag True
-                               , ghcOptNumJobs = toFlag numJobs }
+                               , ghcOptNumJobs = numJobs }
 
   unless forRepl $
     runGhcjsProg compileOpts { ghcOptNoLink  = toFlag True
-                             , ghcOptNumJobs = toFlag numJobs }
+                             , ghcOptNumJobs = numJobs }
 
   -- build any C sources
   unless (null cSrcs || not nativeToo) $ do
