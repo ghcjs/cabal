@@ -39,10 +39,11 @@ module Distribution.Simple.LHC (
         ghcVerbosityOptions
  ) where
 
+import Distribution.Simple.GHC.Props ( getImplProps )
 import Distribution.PackageDescription as PD
          ( PackageDescription(..), BuildInfo(..), Executable(..)
-         , Library(..), libModules, hcOptions, usedExtensions, allExtensions
-         , hcSharedOptions, hcProfOptions )
+         , Library(..), libModules, hcOptions, hcProfOptions, hcSharedOptions
+         , usedExtensions, allExtensions )
 import Distribution.InstalledPackageInfo
                                 ( InstalledPackageInfo
                                 , parseInstalledPackageInfo )
@@ -786,4 +787,5 @@ registerPackage
   -> IO ()
 registerPackage verbosity installedPkgInfo _pkg lbi _inplace packageDbs = do
   let Just lhcPkg = lookupProgram lhcPkgProgram (withPrograms lbi)
-  HcPkg.reregister verbosity lhcPkg packageDbs (Right installedPkgInfo)
+  HcPkg.reregister verbosity (getImplProps $ compiler lbi) lhcPkg packageDbs
+    (Right installedPkgInfo)
