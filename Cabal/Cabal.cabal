@@ -251,6 +251,7 @@ test-suite unit-tests
     test-framework-hunit,
     test-framework-quickcheck2,
     HUnit,
+    pretty,
     QuickCheck < 2.8,
     Cabal
   ghc-options: -Wall
