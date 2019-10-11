@@ -57,9 +57,15 @@ import Distribution.Client.InstallPlan
          ( toList, foldPlanPackage )
 import Distribution.Types.UnqualComponentName
          ( UnqualComponentName, unUnqualComponentName )
+import Distribution.Simple.Program.Builtin
+         ( ghcProgram )
+import Distribution.Simple.Program.Db
+         ( lookupProgram )
 import Distribution.Simple.Program.Run
          ( runProgramInvocation, ProgramInvocation(..),
            emptyProgramInvocation )
+import Distribution.Simple.Program.Types
+         ( programPath )
 import Distribution.Types.UnitId
          ( UnitId )
 
@@ -282,11 +288,18 @@ runAction (configFlags, configExFlags, installFlags, haddockFlags, testFlags)
                                   exeName
                </> exeName
     let args = drop 1 targetStrings
+    (exePath', args') <- doesFileExist exePath >>= \case
+      True -> return (exePath, args)
+      False ->
+        case Map.lookup "ghc" (elabProgramPaths pkg) of
+          Nothing             -> die' verbosity "The program 'ghc' is required but it could not be found"
+          Just ghcPath ->
+            return (ghcPath, ["--run-executable", exePath] ++ args)
     runProgramInvocation
       verbosity
       emptyProgramInvocation {
-        progInvokePath  = exePath,
-        progInvokeArgs  = args,
+        progInvokePath  = exePath',
+        progInvokeArgs  = args',
         progInvokeEnv   = dataDirsEnvironmentForPlan
                             (distDirLayout baseCtx)
                             elaboratedPlan

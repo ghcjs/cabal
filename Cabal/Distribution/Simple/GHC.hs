@@ -2,6 +2,7 @@
 {-# LANGUAGE MultiWayIf #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE TupleSections #-}
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE CPP #-}
 
 -----------------------------------------------------------------------------
@@ -1782,13 +1783,27 @@ installExe verbosity lbi binDir buildPref
   let exeName' = unUnqualComponentName $ exeName exe
       exeFileName = exeTargetName (hostPlatform lbi) exe
       fixedExeBaseName = progprefix ++ exeName' ++ progsuffix
-      installBinary dest = do
+      exePath = buildPref </> exeName' </> exeFileName
+      installBinary dest = doesFileExist exePath >>= \case
+        True -> do
           installExecutableFile verbosity
             (buildPref </> exeName' </> exeFileName)
             (dest <.> exeExtension (hostPlatform lbi))
           when (stripExes lbi) $
             Strip.stripExe verbosity (hostPlatform lbi) (withPrograms lbi)
                            (dest <.> exeExtension (hostPlatform lbi))
+        False -> do
+          putStrLn "HELLO"
+          -- The executable exists but is not a simple file.
+          -- Deligate installation to the compiler
+          runDbProgram verbosity ghcProgram (withPrograms lbi) $
+            [ "--install-executable"
+            , buildPref </> exeName' </> exeFileName
+            , "-o", dest
+            ] ++
+            case (stripExes lbi, lookupProgram stripProgram $ withPrograms lbi) of
+             (True, Just strip) -> ["-strip-program", programPath strip]
+             _                  -> []
   installBinary (binDir </> fixedExeBaseName)
 
 -- |Install foreign library for GHC.

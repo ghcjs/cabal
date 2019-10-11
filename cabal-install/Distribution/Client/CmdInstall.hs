@@ -102,6 +102,8 @@ import Distribution.Simple.GHC
          , GhcImplInfo(..), getImplInfo
          , GhcEnvironmentFileEntry(..)
          , renderGhcEnvironmentFile, readGhcEnvironmentFile, ParseErrorExc )
+import Distribution.Simple.Program
+         ( runDbProgram, ghcProgram )
 import Distribution.System
          ( Platform )
 import Distribution.Types.UnitId
@@ -592,7 +594,7 @@ installAction (configFlags, configExFlags, installFlags, haddockFlags, testFlags
       then installLibraries verbosity
            buildCtx compiler packageDbs progDb envFile envEntries'
       else installExes verbosity
-           baseCtx buildCtx platform compiler clientInstallFlags
+           baseCtx buildCtx platform compiler progDb clientInstallFlags
   where
     configFlags' = disableTestsBenchsByDefault configFlags
     verbosity = fromFlagOrDefault normal (configVerbosity configFlags')
@@ -610,9 +612,10 @@ installExes
   -> ProjectBuildContext
   -> Platform
   -> Compiler
+  -> ProgramDb
   -> ClientInstallFlags
   -> IO ()
-installExes verbosity baseCtx buildCtx platform compiler
+installExes verbosity baseCtx buildCtx platform compiler progDb
             clientInstallFlags = do
   let storeDirLayout = cabalStoreDirLayout $ cabalDirLayout baseCtx
 
@@ -634,6 +637,7 @@ installExes verbosity baseCtx buildCtx platform compiler
   let
     doInstall = installUnitExes
                   verbosity
+                  progDb
                   overwritePolicy
                   mkUnitBinDir mkExeName
                   installdir installMethod
@@ -733,6 +737,7 @@ disableTestsBenchsByDefault configFlags =
 -- | Symlink/copy every exe from a package from the store to a given location
 installUnitExes
   :: Verbosity
+  -> ProgramDb
   -> OverwritePolicy -- ^ Whether to overwrite existing files
   -> (UnitId -> FilePath) -- ^ A function to get an UnitId's
                           -- ^ store directory
@@ -743,7 +748,7 @@ installUnitExes
   -> ( UnitId
      , [(ComponentTarget, [TargetSelector])] )
   -> IO ()
-installUnitExes verbosity overwritePolicy
+installUnitExes verbosity progDb overwritePolicy
                 mkSourceBinDir mkExeName
                 installdir installMethod
                 (unit, components) =
@@ -753,22 +758,30 @@ installUnitExes verbosity overwritePolicy
     exeMaybe (ComponentTarget (CExeName exe) _) = Just exe
     exeMaybe _ = Nothing
     installAndWarn exe = do
-      success <- installBuiltExe
-                   verbosity overwritePolicy
-                   (mkSourceBinDir unit) (mkExeName exe)
-                   installdir installMethod
-      let errorMessage = case overwritePolicy of
-            NeverOverwrite ->
-              "Path '" <> (installdir </> prettyShow exe) <> "' already exists. "
-              <> "Use --overwrite-policy=always to overwrite."
-            -- This shouldn't even be possible, but we keep it in case
-            -- symlinking/copying logic changes
-            AlwaysOverwrite ->
-              case installMethod of
-                InstallMethodSymlink -> "Symlinking"
-                InstallMethodCopy    ->
-                  "Copying" <> " '" <> prettyShow exe <> "' failed."
-      unless success $ die' verbosity errorMessage
+      let exePath = mkSourceBinDir unit </> mkExeName exe
+      doesFileExist exePath >>= \case
+        True -> do
+          success <- installBuiltExe
+                       verbosity overwritePolicy
+                       (mkSourceBinDir unit) (mkExeName exe)
+                       installdir installMethod
+          let errorMessage = case overwritePolicy of
+                NeverOverwrite ->
+                  "Path '" <> (installdir </> prettyShow exe) <> "' already exists. "
+                  <> "Use --overwrite-policy=always to overwrite."
+                -- This shouldn't even be possible, but we keep it in case
+                -- symlinking/copying logic changes
+                AlwaysOverwrite ->
+                  case installMethod of
+                    InstallMethodSymlink -> "Symlinking"
+                    InstallMethodCopy    ->
+                      "Copying" <> " '" <> prettyShow exe <> "' failed."
+          unless success $ die' verbosity errorMessage
+        False ->
+          runDbProgram verbosity ghcProgram progDb
+            [ "--install-executable", exePath
+            , "-o", installdir </> mkExeName exe
+            ]
 
 -- | Install a specific exe.
 installBuiltExe

@@ -1,3 +1,4 @@
+{-# LANGUAGE LambdaCase #-}
 -----------------------------------------------------------------------------
 -- |
 -- Module      :  Distribution.Client.Run
@@ -30,6 +31,8 @@ import Distribution.Simple.BuildPaths        (exeExtension)
 import Distribution.Simple.LocalBuildInfo    (ComponentName (..),
                                               LocalBuildInfo (..),
                                               depLibraryPaths)
+import Distribution.Simple.Program           (lookupProgram, ghcProgram,
+                                              programPath)
 import Distribution.Simple.Utils             (die', notice, warn,
                                               rawSystemExitWithEnv,
                                               addLibraryPath)
@@ -39,7 +42,7 @@ import Distribution.Deprecated.Text                     (display)
 
 import qualified Distribution.Simple.GHCJS as GHCJS
 
-import System.Directory                      (getCurrentDirectory)
+import System.Directory                      (getCurrentDirectory, doesFileExist)
 import Distribution.Compat.Environment       (getEnvironment)
 import System.FilePath                       ((<.>), (</>))
 
@@ -126,7 +129,13 @@ run verbosity lbi exe exeArgs = do
       _     -> do
          p <- tryCanonicalizePath $
             buildPref </> exeName' </> (exeName' <.> exeExtension (hostPlatform lbi))
-         return (p, [])
+         doesFileExist p >>= \case
+           True -> return (p, [])
+           False ->
+             case lookupProgram ghcProgram (withPrograms lbi) of
+               Nothing             -> die' verbosity "The program 'ghc' is required but it could not be found"
+               Just configuredProg ->
+                 return (programPath configuredProg, ["--run-executable", p])
 
   env  <- (dataDirEnvVar:) <$> getEnvironment
   -- Add (DY)LD_LIBRARY_PATH if needed
